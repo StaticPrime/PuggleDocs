@@ -312,9 +312,9 @@ extension EditorController {
     // MARK: Modes
 
     func setMode(_ mode: EditingMode) {
-        state.mode = mode
-        textViews.forEach { $0.isEditable = mode != .viewing }
-        for page in pages { [page.headerView, page.footerView].compactMap { $0 }.forEach { $0.isEditable = mode != .viewing } }
+        // People who may only comment can't suggest changes.
+        state.mode = mode == .suggesting && state.access != .full ? .editing : mode
+        applyEditability()
         comments?.modeDidChange()
     }
 

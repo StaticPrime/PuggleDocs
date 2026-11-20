@@ -30,6 +30,8 @@ final class EditorController: NSObject {
     var onLinkClicked: ((Int) -> Void)?
     /// Called to open Image options for the selected image.
     var onImageOptions: (() -> Void)?
+    /// Called when sharing locks or unlocks the text.
+    var onAccessChange: (() -> Void)?
     /// Resize handles around the selected image.
     var imageOverlay: ImageSelectionOverlay?
     /// Comment cards, highlights and commands.
@@ -42,6 +44,16 @@ final class EditorController: NSObject {
     /// Paint format: attributes captured from the selection, applied to the next selection.
     var paintFormatAttributes: (characters: [NSAttributedString.Key: Any], paragraph: ParagraphAttributes)?
     var paintFormatSticky = false
+    /// While the document is shared: its part in that, which keeps undo for the text.
+    weak var collaboration: DocumentCollaboration?
+    /// Whether undo for the text is kept by the shared document rather than the text views, which can't follow other
+    /// people's changes.
+    var usesSharedUndo = false {
+        didSet {
+            textViews.forEach { $0.allowsUndo = !usesSharedUndo }
+            for page in pages { [page.headerView, page.footerView].compactMap { $0 }.forEach { $0.allowsUndo = !usesSharedUndo } }
+        }
+    }
 
     init(document: PuggleDocument, state: EditorState) {
         textStorage = document.textStorage
@@ -179,7 +191,7 @@ final class EditorController: NSObject {
         textView.delegate = self
         textView.isRichText = true
         textView.importsGraphics = true
-        textView.allowsUndo = true
+        textView.allowsUndo = !usesSharedUndo
         textView.usesFontPanel = true
         textView.usesRuler = false
         textView.drawsBackground = false
@@ -235,6 +247,7 @@ final class EditorController: NSObject {
         view.editor = self
         view.delegate = headerFooterDelegate
         view.isEditable = state.isEditable
+        view.allowsUndo = !usesSharedUndo
         if storage.length == 0 { view.typingAttributes = DocumentDefaults.typingAttributes }
         return view
     }
@@ -329,6 +342,40 @@ final class EditorController: NSObject {
         }
         canvas.pageSize = setup.pageSize
         onSelectionChange?()
+    }
+
+    // MARK: Access
+
+    /// Locks or unlocks the text as sharing allows; people who may only comment can't suggest either.
+    func setAccess(_ access: DocumentAccess) {
+        guard state.access != access else { return }
+        state.access = access
+        if access != .full, state.mode == .suggesting { state.mode = .editing }
+        applyEditability()
+        comments?.modeDidChange()
+        onAccessChange?()
+    }
+
+    func applyEditability() {
+        textViews.forEach { $0.isEditable = state.isEditable }
+        for page in pages { [page.headerView, page.footerView].compactMap { $0 }.forEach { $0.isEditable = state.isEditable } }
+    }
+
+    /// After the whole text was replaced (by a shared document's copy in iCloud): pages, headings, comments and the
+    /// toolbar catch up.
+    func refreshAfterLoading() {
+        if textStorage.length > 0 {
+            prepareImages(in: NSRange(location: 0, length: textStorage.length))
+            TableModel.fitTables(in: textStorage, range: NSRange(location: 0, length: textStorage.length), availableWidth: pageSetup.contentSize.width)
+        }
+        adjustPages()
+        refreshUsedHeadings()
+        headerFooterDidChange()
+        comments?.reload()
+        let length = textStorage.length
+        if activeTextView.selectedRange().location > length { activeTextView.setSelectedRange(NSRange(location: length, length: 0)) }
+        updateSummaryNow()
+        onTextChange?()
     }
 
     // MARK: Zoom

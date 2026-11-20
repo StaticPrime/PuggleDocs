@@ -76,6 +76,7 @@ import PuggleDocsKit
     func pdCommentHistory(_ sender: Any?)
     func pdAcceptAllSuggestions(_ sender: Any?)
     func pdRejectAllSuggestions(_ sender: Any?)
+    func pdCollaborate(_ sender: Any?)
 }
 
 enum MenuKind: String, CaseIterable {
@@ -177,6 +178,9 @@ enum MenuBuilder {
             .separator(),
             item("Make a copy", #selector(NSDocument.duplicate(_:)), "s", [.command, .shift], symbol: "plus.square.on.square"),
             .separator(),
+            item("Collaborate…", #selector(DocumentCommands.pdCollaborate(_:)), "c", [.command, .option], symbol: "person.2"),
+            sharedDocumentsMenu(),
+            .separator(),
             item("Save", #selector(NSDocument.save(_:)), "s", symbol: "square.and.arrow.down"),
             submenu("Download", symbol: "arrow.down.to.line", download),
             item("Rename", #selector(DocumentCommands.pdRename(_:)), symbol: "pencil"),
@@ -192,6 +196,13 @@ enum MenuBuilder {
             .separator(),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
         ]
+    }
+
+    /// File ▸ Shared documents: those shared with this person, and theirs that are shared, filled in as it opens.
+    private static func sharedDocumentsMenu() -> NSMenuItem {
+        let item = submenu("Shared documents", symbol: "person.2.circle", [])
+        item.submenu?.delegate = SharedDocumentsMenu.shared
+        return item
     }
 
     private static func editItems() -> [NSMenuItem] {
@@ -385,5 +396,65 @@ enum MenuBuilder {
 
     private static func helpItems() -> [NSMenuItem] {
         [item("Keyboard shortcuts", #selector(DocumentCommands.pdShowShortcuts(_:)), "/", symbol: "keyboard")]
+    }
+}
+
+/// Fills File ▸ Shared documents each time it opens.
+final class SharedDocumentsMenu: NSObject, NSMenuDelegate {
+    static let shared = SharedDocumentsMenu()
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let controller = CollaborationController.shared else { return }
+        let others = controller.sharedWithMe
+        let mine = controller.mine
+        if case let .unavailable(reason) = controller.status {
+            let item = NSMenuItem(title: reason, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        if !others.isEmpty {
+            menu.addItem(sectionHeader("Shared with you"))
+            for entry in others {
+                let item = NSMenuItem(title: entry.title, action: #selector(open(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.id.uuidString
+                item.toolTip = entry.ownerName.isEmpty ? nil : "Shared by \(entry.ownerName)"
+                item.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+        }
+        if !mine.isEmpty {
+            if !others.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(sectionHeader("Shared by you"))
+            for (id, title) in mine {
+                let item = NSMenuItem(title: title, action: #selector(open(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = id.uuidString
+                item.image = NSImage(systemSymbolName: "person.2", accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+        }
+        if others.isEmpty, mine.isEmpty {
+            let item = NSMenuItem(title: "No shared documents", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> NSMenuItem {
+        if #available(macOS 14, *) { return NSMenuItem.sectionHeader(title: title) }
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    @objc private func open(_ sender: NSMenuItem) {
+        guard let controller = CollaborationController.shared, let id = (sender.representedObject as? String).flatMap(UUID.init(uuidString:)) else { return }
+        if let entry = controller.sharedWithMe.first(where: { $0.id == id }) {
+            controller.openShared(entry)
+        } else if let me = controller.status.me {
+            controller.openShared(SharedDocumentEntry(id: id, title: sender.title, ownerName: me.name, ownerID: me.id))
+        }
     }
 }

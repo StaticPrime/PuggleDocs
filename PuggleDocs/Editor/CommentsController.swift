@@ -117,7 +117,7 @@ final class CommentsController {
         let suggestions = Suggestions.summaries(in: storage)
         if model.suggestions != suggestions { model.suggestions = suggestions }
         if let active = model.activeSuggestion, !suggestions.contains(where: { $0.id == active }) { model.activeSuggestion = nil }
-        let canComment = editor.state.mode != .viewing
+        let canComment = editor.state.canComment
         if model.canComment != canComment { model.canComment = canComment }
         if let active = model.activeID, !isShown(active) { model.activeID = nil }
         if let draft = model.draft, NSMaxRange(draft.range) > storage.length { model.draft = nil }
@@ -153,16 +153,68 @@ final class CommentsController {
         editor.textViews.forEach { $0.needsDisplay = true }
     }
 
-    /// Replaces the document's threads, with undo.
+    /// Replaces the document's threads, with undo. Undo takes back only what this change did to each thread it
+    /// touched, so that in a shared document what other people did meanwhile (a reply, a thread of their own) stays.
     func setThreads(_ threads: [CommentThread], actionName: String?) {
         guard let document = editor.document else { return }
-        let old = document.comments
+        let before = Dictionary(document.comments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(threads.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let steps = Set(before.keys).union(after.keys).filter { before[$0] != after[$0] }.map { (id: $0, before: before[$0], after: after[$0]) }
         document.comments = threads
-        undoManager?.registerUndo(withTarget: self) { controller in
-            controller.setThreads(old, actionName: nil)
-        }
+        registerUndo(steps)
         if let actionName { undoManager?.setActionName(actionName) }
         reload()
+    }
+
+    private func registerUndo(_ steps: [(id: String, before: CommentThread?, after: CommentThread?)]) {
+        guard !steps.isEmpty else { return }
+        undoManager?.registerUndo(withTarget: self) { controller in
+            controller.revert(steps)
+        }
+    }
+
+    /// Takes back each step's change to its thread, as the thread is now.
+    private func revert(_ steps: [(id: String, before: CommentThread?, after: CommentThread?)]) {
+        guard let document = editor.document else { return }
+        var threads = document.comments
+        var redo: [(id: String, before: CommentThread?, after: CommentThread?)] = []
+        for step in steps {
+            let index = threads.firstIndex { $0.id == step.id }
+            let current = index.map { threads[$0] }
+            let reverted = Self.revert(current, from: step.after, to: step.before)
+            redo.append((step.id, current, reverted))
+            switch (index, reverted) {
+            case let (index?, thread?): threads[index] = thread
+            case let (index?, nil): threads.remove(at: index)
+            case let (nil, thread?): threads.append(thread)
+            case (nil, nil): break
+            }
+        }
+        if threads != document.comments { document.comments = threads }
+        registerUndo(redo)
+        reload()
+    }
+
+    /// `current` with the change from `before` to `after` taken back, leaving the rest of it as it is now.
+    static func revert(_ current: CommentThread?, from after: CommentThread?, to before: CommentThread?) -> CommentThread? {
+        // A thread the change made goes; one it deleted comes back.
+        guard let before else { return nil }
+        guard let after, var thread = current else { return before }
+        if after.text != before.text { thread.text = before.text }
+        if after.resolved != before.resolved { thread.resolved = before.resolved }
+        let beforeIDs = Set(before.replies.map(\.id))
+        let afterIDs = Set(after.replies.map(\.id))
+        thread.replies.removeAll { afterIDs.contains($0.id) && !beforeIDs.contains($0.id) }
+        for reply in before.replies {
+            if !afterIDs.contains(reply.id) {
+                if !thread.replies.contains(where: { $0.id == reply.id }) { thread.replies.append(reply) }
+            } else if let edited = after.replies.first(where: { $0.id == reply.id }), edited.text != reply.text,
+                      let index = thread.replies.firstIndex(where: { $0.id == reply.id }) {
+                thread.replies[index].text = reply.text
+            }
+        }
+        thread.replies.sort { $0.date < $1.date }
+        return thread
     }
 
     private func update(_ id: String, actionName: String, _ change: (inout CommentThread) -> Void) {
@@ -211,10 +263,15 @@ final class CommentsController {
             cancelDraft()
             return
         }
-        let thread = CommentThread(author: CommentAuthor.name, text: text)
+        let thread = CommentThread(author: CommentAuthor.name, authorID: editor.collaboration?.me?.id, text: text)
         undoManager?.beginUndoGrouping()
         textView.breakUndoCoalescing()
-        if textView.shouldChangeText(in: range, replacementString: nil) {
+        if !editor.state.isEditable {
+            // Someone who may only comment marks the text without changing it; the mark stays on this Mac.
+            storage.beginEditing()
+            CommentAnchors.add(thread.id, to: storage, range: range)
+            storage.endEditing()
+        } else if textView.shouldChangeText(in: range, replacementString: nil) {
             storage.beginEditing()
             CommentAnchors.add(thread.id, to: storage, range: range)
             storage.endEditing()
@@ -288,7 +345,8 @@ final class CommentsController {
         guard !text.isEmpty else { return }
         model.replyText = ""
         let author = CommentAuthor.name
-        update(id, actionName: "Reply") { $0.replies.append(CommentReply(author: author, text: text)) }
+        let authorID = editor.collaboration?.me?.id
+        update(id, actionName: "Reply") { $0.replies.append(CommentReply(author: author, authorID: authorID, text: text)) }
     }
 
     func setResolved(_ id: String, _ resolved: Bool) {
@@ -351,6 +409,15 @@ final class CommentsController {
 
     func cancelEdit() { model.editing = nil }
 
+    /// In a shared document, people edit only what they wrote (the owner, what was written before it was shared).
+    func mayEdit(authorID: String?) -> Bool {
+        guard let collaboration = editor.collaboration, let me = collaboration.me?.id else { return true }
+        return authorID == me || (authorID == nil && collaboration.isOwner)
+    }
+
+    /// And delete what they wrote, or anything if they can edit the document.
+    func mayDelete(authorID: String?) -> Bool { mayEdit(authorID: authorID) || editor.state.access == .full }
+
     func setAuthorName(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -377,7 +444,7 @@ final class CommentsController {
     }
 
     func modeDidChange() {
-        if editor.state.mode == .viewing {
+        if !editor.state.canComment {
             model.draft = nil
             model.activeID = nil
             model.activeSuggestion = nil

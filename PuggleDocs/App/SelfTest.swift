@@ -16,6 +16,10 @@ final class SelfTest {
 
     static func runIfRequested() {
         guard UserDefaults.standard.bool(forKey: "PDSelfTest") else { return }
+        if UserDefaults.standard.string(forKey: "PDSelfTestSuite") == "collaboration" {
+            CollaborationSelfTest.run()
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard let controller = NSApp.windows.compactMap({ $0.windowController as? DocumentWindowController }).first else {
                 print("SELFTEST FAIL: no window")

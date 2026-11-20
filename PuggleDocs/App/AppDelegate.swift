@@ -1,17 +1,40 @@
 import AppKit
+import CloudKit
 import PuggleDocsKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MenuBuilder.makeMainMenu()
         UserDefaults.standard.register(defaults: ["NSFullScreenMenuItemEverywhere": false])
+        CollaborationController.shared = CollaborationController(service: makeCollaborationService())
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CollaborationController.shared.start()
         #if DEBUG
         DebugLaunchOptions.runIfRequested()
         SelfTest.runIfRequested()
         #endif
+    }
+
+    /// iCloud, where documents are shared; in debug runs that ask for it, a stand-in for it.
+    private func makeCollaborationService() -> CollaborationService {
+        #if DEBUG
+        if StandInCloud.isRequested { return StandInCollaboration(me: StandInCloud.me, cloud: .shared) }
+        #endif
+        if CloudKitCollaboration.isEntitled { return CloudKitCollaboration() }
+        return UnavailableCollaboration(reason: "Sharing goes through iCloud, which this copy of PuggleDocs isn’t signed to use.")
+    }
+
+    // MARK: Shared documents
+
+    /// Joins a document someone shared, from the link they sent, and opens it.
+    func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        CollaborationController.shared.accept(metadata)
+    }
+
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        CollaborationController.shared.receivedPush(userInfo)
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
@@ -149,6 +172,7 @@ enum DebugLaunchOptions {
             default: break
             }
             if let mode = UserDefaults.standard.string(forKey: "PDComments") { addSampleComments(controller, mode: mode) }
+            if UserDefaults.standard.bool(forKey: "PDCollaborationDemo") { CollaborationDemo.start(controller) }
             if UserDefaults.standard.bool(forKey: "PDShowTablePicker") { controller.pdInsertTable(nil) }
             switch UserDefaults.standard.string(forKey: "PDOpenSheet") {
             case "pageSetup": controller.pdPageSetup(nil)
@@ -156,6 +180,10 @@ enum DebugLaunchOptions {
             case "customSpacing": controller.pdCustomSpacing(nil)
             case "tableProperties": controller.pdTableProperties(nil)
             case "shortcuts": controller.pdShowShortcuts(nil)
+            case "collaborate":
+                DispatchQueue.main.asyncAfter(deadline: .now() + (UserDefaults.standard.bool(forKey: "PDCollaborationDemo") ? 1.6 : 0)) {
+                    controller.showCollaborate()
+                }
             default: break
             }
             // Through the menu item itself, so the snapshot also checks the menu's wiring.
@@ -163,7 +191,8 @@ enum DebugLaunchOptions {
                 appMenu.performActionForItem(at: appMenu.indexOfItem(withTitle: "About PuggleDocs"))
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (UserDefaults.standard.string(forKey: "PDComments") == nil ? 2.5 : 3.5)) {
+        let settle = UserDefaults.standard.bool(forKey: "PDCollaborationDemo") ? 5.0 : (UserDefaults.standard.string(forKey: "PDComments") == nil ? 2.5 : 3.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
             guard let documentWindow = NSApp.windows.first(where: { $0.windowController is DocumentWindowController })
                     ?? NSApp.windows.first(where: { $0.windowController is PDFWindowController }),
                   case let popover = NSApp.windows.first(where: { String(describing: type(of: $0)).contains("Popover") && $0.isVisible }),
@@ -188,6 +217,40 @@ enum DebugLaunchOptions {
             // Exit directly: quitting normally would wait on any open sheet or unsaved-changes prompt.
             fflush(stdout)
             exit(0)
+        }
+    }
+}
+/// `-PDCollaborationDemo YES` (with `-PDStandInCloud YES`) shares the window's document on the stand-in "iCloud" with
+/// two people, who open it, type and comment, for screenshots of a shared document.
+enum CollaborationDemo {
+    static let ana = StandInPerson(Collaborator(id: "ana@example.com", name: "Ana Lopez", address: "ana@example.com"))
+    static let ben = StandInPerson(Collaborator(id: "ben@example.com", name: "Ben Carter", address: "ben@example.com"))
+
+    static func start(_ controller: DocumentWindowController) {
+        guard let document = controller.puggleDocument else { return }
+        DocumentCollaboration.noticeDelay = 3
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Project Puggle plan.docx")
+        document.save(to: url, ofType: DocumentFormat.docx.typeIdentifier, for: .saveAsOperation) { _ in
+            MainActor.assumeIsolated {
+                CollaborationController.shared.share(document, in: controller, access: .invited, permission: .edit) { _ in
+                    guard let id = document.collaboration?.id else { return }
+                    let service = CollaborationController.shared.service
+                    service.invite("ana@example.com", permission: .edit, to: id) { result in
+                        if case let .success(sharing) = result { document.collaboration?.sharingUpdated(sharing) }
+                    }
+                    service.invite("ben@example.com", permission: .comment, to: id) { result in
+                        if case let .success(sharing) = result { document.collaboration?.sharingUpdated(sharing) }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        ana.join(id)
+                        ben.join(id)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        ana.type("Updated by Ana: ", at: 0)
+                        ben.comment("Can we add a date for each milestone?", on: "Milestones")
+                    }
+                }
+            }
         }
     }
 }

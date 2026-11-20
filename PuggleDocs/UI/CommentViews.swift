@@ -148,6 +148,9 @@ struct CommentEntryView: View {
     let isEditing: Bool
     @Binding var editText: String
     var onResolve: (() -> Void)?
+    /// In a shared document, people change only their own comments.
+    var canEdit = true
+    var canDelete = true
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onSave: () -> Void
@@ -173,8 +176,11 @@ struct CommentEntryView: View {
                     if let onResolve {
                         CommentIconButton(symbol: "checkmark", help: "Mark as resolved and hide discussion") { _ in onResolve() }
                     }
-                    CommentIconButton(symbol: "ellipsis", help: "More options", rotation: 90) { anchor in
-                        popUpMenu([MenuAction.item("Edit", onEdit), MenuAction.item("Delete", onDelete)], below: anchor)
+                    if canEdit || canDelete {
+                        CommentIconButton(symbol: "ellipsis", help: "More options", rotation: 90) { anchor in
+                            popUpMenu((canEdit ? [MenuAction.item("Edit", onEdit)] : []) + (canDelete ? [MenuAction.item("Delete", onDelete)] : []),
+                                      below: anchor)
+                        }
                     }
                 }
             }
@@ -210,6 +216,8 @@ struct CommentCard: View {
                 CommentEntryView(author: thread.author, date: thread.date, text: thread.text, showsControls: active,
                                  isEditing: model.editing == .thread(threadID), editText: $model.editText,
                                  onResolve: { controller.setResolved(threadID, true) },
+                                 canEdit: controller.mayEdit(authorID: thread.authorID),
+                                 canDelete: controller.mayDelete(authorID: thread.authorID),
                                  onEdit: { edit(.thread(threadID)) },
                                  onDelete: { controller.delete(threadID) },
                                  onSave: { controller.saveEdit() },
@@ -217,6 +225,8 @@ struct CommentCard: View {
                 ForEach(thread.replies) { reply in
                     CommentEntryView(author: reply.author, date: reply.date, text: reply.text, showsControls: active,
                                      isEditing: model.editing == .reply(thread: threadID, reply: reply.id), editText: $model.editText,
+                                     canEdit: controller.mayEdit(authorID: reply.authorID),
+                                     canDelete: controller.mayDelete(authorID: reply.authorID),
                                      onEdit: { edit(.reply(thread: threadID, reply: reply.id)) },
                                      onDelete: { controller.deleteReply(reply.id, in: threadID) },
                                      onSave: { controller.saveEdit() },

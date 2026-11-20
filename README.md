@@ -2,16 +2,17 @@
 
 **Write anything, beautifully.**
 
-PuggleDocs is a full word processor for the Mac, with real pages, rulers and styles. If you've used an online word processor, you'll feel right at home, and your writing never leaves your Mac.
+PuggleDocs is a full word processor for the Mac, with real pages, rulers and styles. If you've used an online word processor, you'll feel right at home, and your writing never leaves your Mac unless you share it.
 
 - Paged editing with styles, lists, tables, images and links
 - Comments and suggesting mode, kept as Word comments and tracked changes
+- Collaborate live with other Mac users through iCloud, each person able to edit or only comment
 - Headers, footers, page numbers and a clickable outline
 - Find and replace, live word count, autosave and version history
 
 It opens and saves Word (.docx), OpenDocument (.odt), Rich Text (.rtf), Markdown (.md), web page (.html) and plain text (.txt) files, and exports PDF and EPUB.
 
-PuggleDocs is free, needs no account and has no tracking. It runs inside Apple's app sandbox with no permission to use the network, on macOS 14 Sonoma or later with Apple silicon or Intel. It's written in Swift with AppKit, TextKit and SwiftUI, and is part of the PuggleSoft family with [PuggleSheets](https://github.com/StaticPrime/PuggleSheets) and [PuggleSlides](https://github.com/StaticPrime/PuggleSlides).
+PuggleDocs is free, needs no account of its own and has no tracking. It runs inside Apple's app sandbox with no permission to use the network (macOS takes the documents you share to and from iCloud for it), on macOS 14 Sonoma or later with Apple silicon or Intel. It's written in Swift with AppKit, TextKit and SwiftUI, and is part of the PuggleSoft family with [PuggleSheets](https://github.com/StaticPrime/PuggleSheets) and [PuggleSlides](https://github.com/StaticPrime/PuggleSlides).
 
 ## Features
 
@@ -41,6 +42,16 @@ PuggleDocs is free, needs no account and has no tracking. It runs inside Apple's
 - **Comments.** Select text and choose Insert ▸ Comment (⌥⌘M), the toolbar's comment button, the right-click menu or the round button that appears beside a selection. Comments appear as cards beside the page, lined up with their text, which is highlighted (darker for the open comment). Reply, resolve and re-open, edit and delete (⋮). In the comment box Return adds a line, ⌘Return posts and Esc cancels. The comment history button in the header (⇧⌥⌘A) lists every comment, resolved ones included, and sets the name your comments are signed with. Comments are saved in DOCX using Word's comment parts (with replies and resolved state), in ODT and in HTML. Highlights never print.
 - **Suggesting mode.** Switch the mode menu to Suggesting: what you type appears in your colour and what you delete is struck through, without changing the text until someone accepts it. Each suggestion gets a card with accept (✓) and reject (✗), and Tools ▸ Review suggested edits accepts or rejects them all. Suggestions are saved as tracked changes in DOCX and ODT and as `<ins>`/`<del>` in HTML, and Word's tracked changes open as suggestions.
 
+### Collaboration
+
+- **Collaborate.** The Collaborate button in the header, left of Download (or File ▸ Collaborate…, ⌥⌘C), shares a document with other people who use PuggleDocs on their Macs, through iCloud. A document is kept on your Mac first: one that has never been saved asks where, and that file stays yours. Invite Collaborators sends the link by Messages, Mail or AirDrop, where you choose whether the people you invite can make changes; or choose Anyone with the Link, whether those people can edit or only comment, and Copy Link to pass it on yourself. Whoever clicks the link joins, and the document opens for them in PuggleDocs.
+- **Editing together.** Everyone's changes show on everyone else's Mac as they're made, typing, formatting, tables, images, headers and footers, and page setup, a moment after each change and every couple of seconds while someone else has it open. Two people typing at once both keep what they typed. Undo and Redo take back only your own changes, wherever other people's have moved them to.
+- **Who's here.** Everyone who has joined shows as a round badge with their initials in the header, with a green dot while they have it open. Click a badge to see who they are in iCloud, their email address or phone number, whether they can edit or comment, and when they were last there.
+- **Edit or comment.** In the Collaborate sheet the owner sets, person by person, whether each can edit or only comment, and can take anyone out. People who can only comment see every change as it's made, and add comments and replies (Commenting mode), but can't change the text: iCloud itself turns their changes down. Everyone can print a shared document, save a copy of it on their Mac (File ▸ Save, Make a copy, or Download), whatever they can do.
+- **Comments.** Comments, replies and resolving go to everyone, anchored to their text however it's been edited since. People edit and delete their own comments; people who can edit can delete anyone's.
+- **Notifications.** When someone changes a shared document and then does nothing more to it for two minutes, everyone else gets one notification summing it up ("Ana Lopez edited “Plan”: added about 120 words, changed the formatting and added a comment"), not one for every change, even when PuggleDocs isn't open. Clicking it opens the document.
+- **Stopping.** Stop Sharing… in the Collaborate sheet takes the document out of your iCloud and from everyone it was shared with, and keeps it on your Mac, saved as it was. Anyone who has it open sees it go at once, with a note saying you stopped sharing it. People can also leave a document shared with them. File ▸ Shared documents lists the documents shared with you and those you share.
+
 ### Files and output
 
 - **Word, Rich Text and plain text.** Open and save **.docx** (own reader and writer: styles, numbering, links, highlights, page size and margins), **.rtf** and **.txt**. Files that contain things PuggleDocs can't keep open as an untitled copy with a notice, so the original is never overwritten with a lossy version.
@@ -58,6 +69,9 @@ Help ▸ Keyboard shortcuts (⌘/) lists every keyboard shortcut.
 - In Suggesting mode, formatting changes and edits to headers and footers apply directly rather than as suggestions.
 - ODT and HTML keep suggested insertions and deletions, but a suggested paragraph break is saved as an ordinary one.
 - Rich Text, plain text and Markdown can't store comments or suggestions: comments are left out and suggestions are saved as accepted text (PuggleDocs says so when it matters).
+- Collaborating goes through iCloud, so it needs an iCloud account, for you and for everyone you share with, and a copy of PuggleDocs signed to use it (see Sharing through iCloud); when it can't, the Collaborate sheet says why. Changes made at the same moment are merged character by character; formatting both people change on the same words at once ends as one of them made it.
+- A shared document opens from iCloud, so it needs the connection to open. Changes made while iCloud can't be reached are kept and sent when it's back; closing the document before then asks first. While a document is shared, its copy in iCloud is the one that counts: the file on the owner's Mac follows it, and changes made to that file in other apps are replaced.
+- Notifications reach people once they've opened the shared document in PuggleDocs, and macOS asks once whether PuggleDocs may show them. Sharing a document clears its undo history up to then.
 
 ## Requirements
 
@@ -74,7 +88,7 @@ xcodebuild -project PuggleDocs.xcodeproj -scheme PuggleDocs -configuration Debug
 open build/DerivedData/Build/Products/Debug/PuggleDocs.app
 ```
 
-The app is sandboxed and signs locally ("Sign to Run Locally"). To distribute it, set your team under *Signing & Capabilities*.
+The app is sandboxed. Debug builds are signed to run on the Mac that built them, unless `Config/Signing.xcconfig` names a team (see Sharing from Xcode below); releases are signed by `Tools/make-installer.sh`.
 
 ### Installer
 
@@ -107,10 +121,46 @@ To sign and notarize releases, add these secrets under the repository's Settings
 | `NOTARY_API_KEY` | The text of an App Store Connect API key file (`AuthKey_….p8`), used to notarize |
 | `NOTARY_KEY_ID` | That key's ID |
 | `NOTARY_ISSUER_ID` | The issuer ID shown above the keys in App Store Connect |
+| `DEVELOPER_ID_PROFILE_BASE64` | The Developer ID provisioning profile for iCloud, base64-encoded (see below), which released copies need to collaborate. A signed release stops without it |
+
+### Sharing through iCloud
+
+Shared documents are kept in iCloud, in the container `iCloud.com.pugglesoft.PuggleDocs`, so only a copy of PuggleDocs signed for that container can share them. Any other copy, like one built from a fresh clone, says so in the Collaborate sheet; debug runs can collaborate through a stand-in for iCloud on the Mac instead (see Tests). To set it up, once:
+
+1. In the Apple Developer account, under Certificates, Identifiers & Profiles ▸ Identifiers, register the iCloud container `iCloud.com.pugglesoft.PuggleDocs`. Then edit the App ID `com.pugglesoft.PuggleDocs`: turn on iCloud, with CloudKit and that container, and Push Notifications.
+2. Under Profiles, make a Developer ID provisioning profile for that App ID and the Developer ID Application certificate, and download it.
+3. Make the container's schema. iCloud's development environment adds record types as they're first saved, but production only takes what's deployed to it. Either collaborate once from Xcode in the development environment with two iCloud accounts (see Sharing from Xcode below), or add the types by hand in CloudKit Console's development environment, then deploy the schema to production:
+
+   | Record type | Fields |
+   | --- | --- |
+   | `Document` | `info` (Bytes), `revision` (Int64), `snapshot` (Asset) |
+   | `Change` | `revision` (Int64), `changeID` (String), `author` (String), `authorName` (String), `change` (Bytes), `changeFile` (Asset, for very large changes like a pasted photo) |
+   | `Comment` | `info` (Bytes) |
+   | `Presence` | `info` (Bytes) |
+   | `Notice` | `title`, `body`, `document`, `owner`, `author` (all String); give `recordName` a Queryable index |
+
+   iCloud's own record of a share, `cloudkit.share`, only appears in the development schema once a share has been saved there, so share one document in the development environment before deploying.
+4. Add the profile to the repository as the secret `DEVELOPER_ID_PROFILE_BASE64` (`base64 -i PuggleDocs.provisionprofile | pbcopy`). To build a signed installer on your Mac instead, set `DEVELOPER_ID_PROFILE` to the profile's path along with the Developer ID variables before running `Tools/make-installer.sh`.
+
+`Tools/make-installer.sh` then puts the profile inside the app and signs it for the container, the production environment and pushes. To try collaborating, install it on two Macs signed in to different iCloud accounts.
+
+#### Sharing from Xcode
+
+A debug build can collaborate too, once it's signed with the team. Make `Config/Signing.xcconfig` (Git ignores it) with your team's ID:
+
+```
+DEVELOPMENT_TEAM = ABCDE12345
+CODE_SIGN_IDENTITY = Apple Development
+CODE_SIGN_ENTITLEMENTS = Config/iCloud.entitlements
+```
+
+Add an Apple ID in that team under Xcode ▸ Settings ▸ Accounts, then build: Xcode makes the development certificate and provisioning profile itself (the App ID needs iCloud and Push Notifications turned on first, as in step 1). Set the team in that file rather than under *Signing & Capabilities*, which would write it into the project for everyone. Debug builds use iCloud's production environment, as installed copies do, so a document shared from Xcode reaches someone who installed PuggleDocs. Production only takes the kinds of records already deployed to it: when PuggleDocs starts saving a new kind, and once at the start, add `ICLOUD_ENVIRONMENT = Development` to `Config/Signing.xcconfig`, collaborate on a document, deploy the schema to production in CloudKit Console, and take the line out again. `Config/iCloud.entitlements` is `PuggleDocs/PuggleDocs.entitlements` with iCloud's added, so keep the two alike.
+
+While debug builds use the development environment, everyone collaborating has to run a debug build too, since installed copies use production: another Mac building from Xcode with the same `Config/Signing.xcconfig` (Xcode registers it the first time), or a second account on the same Mac, signed in to another iCloud account, running a copy of the debug build. In a fresh development environment the first summary notification someone is sent adds the kind of record notifications need, so it isn't shown; the ones after it are. Anything iCloud turns down is written to the Mac's log under the Collaboration category, which Xcode's console shows.
 
 ## Tests
 
-The document model and file formats live in a Swift package with unit tests:
+The document model, file formats and the engine that keeps shared documents the same on every Mac live in a Swift package with unit tests (thousands of random changes made at the same time ending the same, three simulated Macs editing one document through its log, every round of editing recorded and undone exactly, tables staying whole on another Mac):
 
 ```sh
 cd Packages/PuggleDocsKit && swift test
@@ -122,13 +172,21 @@ Debug builds also include an end-to-end check that drives the real editor and pr
 build/DerivedData/Build/Products/Debug/PuggleDocs.app/Contents/MacOS/PuggleDocs -PDSelfTest YES
 ```
 
-Other debug launch arguments: `-PDSampleDocument YES` fills new documents with sample content. `-PDSnapshot name.png` saves a screenshot of the first window (or its open sheet) to the app's temporary folder and quits. Combine it with `-PDWindowWidth`, `-PDZoom`, `-PDPageColor RRGGBB`, `-PDOpenSheet pageSetup|wordCount|customSpacing|tableProperties|shortcuts`, `-PDExportPDF name.pdf`, `-PDOpenEditable YES` (when opening a PDF), `-PDFind word`, `-PDShowLink editor|preview`, `-PDInsertTestImage YES`, `-PDInsertTestTable YES`, `-PDHeaderFooter YES`, `-PDShowTablePicker YES`, `-PDShowOutline YES`, `-PDShowAbout YES` or `-PDComments sample|active|draft|selection|history|suggestions` (example comments and suggestions in the sample document) to check layouts.
+A second suite checks collaboration end to end on a stand-in for iCloud, with simulated people on other "Macs": sharing a document (saved first), inviting one person to edit and one to comment, their Mac opening it with the same text, typing both ways, typing at the same time ending the same, bold text and a table arriving whole, undo and redo taking back only this Mac's typing, the badges and who's viewing, comments, replies and resolving both ways (and undoing a resolve keeping a reply that came meanwhile), taking someone down to commenting (their changes turned down, their comments still arriving), one summary notification after a quiet spell and a fresh one for what's new since, stopping sharing (the document kept here, gone for the others), and a document someone else shares opening read-only (comments allowed, typing changing nothing, their edits arriving live, printing, downloading and copying allowed, and the window saying so and closing when they stop sharing):
+
+```sh
+build/DerivedData/Build/Products/Debug/PuggleDocs.app/Contents/MacOS/PuggleDocs -PDSelfTest YES -PDSelfTestSuite collaboration
+```
+
+Other debug launch arguments: `-PDSampleDocument YES` fills new documents with sample content. `-PDSnapshot name.png` saves a screenshot of the first window (or its open sheet) to the app's temporary folder and quits. Combine it with `-PDWindowWidth`, `-PDZoom`, `-PDPageColor RRGGBB`, `-PDOpenSheet pageSetup|wordCount|customSpacing|tableProperties|shortcuts`, `-PDExportPDF name.pdf`, `-PDOpenEditable YES` (when opening a PDF), `-PDFind word`, `-PDShowLink editor|preview`, `-PDInsertTestImage YES`, `-PDInsertTestTable YES`, `-PDHeaderFooter YES`, `-PDShowTablePicker YES`, `-PDShowOutline YES`, `-PDShowAbout YES` or `-PDComments sample|active|draft|selection|history|suggestions` (example comments and suggestions in the sample document) to check layouts. `-PDStandInCloud YES` collaborates through the stand-in for iCloud, and with `-PDCollaborationDemo YES` too the window's document is shared with two simulated people who open it, type and comment (add `-PDOpenSheet collaborate` for the Collaborate sheet).
 
 ## Project layout
 
 ```
 PuggleDocs/                 macOS app target (files are picked up automatically by Xcode)
-  App/                      Entry point, app delegate, debug-only sample and self-test
+  App/                      Entry point, app delegate, debug-only sample and self-tests
+  Collaboration/            Sharing through iCloud: each shared document's session, iCloud, the Collaborate sheet, the
+                            badges, and a stand-in for iCloud for debug runs
   Document/                 PuggleDocument (editable documents) and PDFViewerDocument (PDF viewer)
   Editor/                   Paged text system, list rendering, typing behaviours, commands
   UI/                       Window controllers, SwiftUI header and toolbar, ruler, menus, dialogs
@@ -137,6 +195,8 @@ Packages/PuggleDocsKit/     Document model, formatting engine and file formats (
   Model/                    Named styles, list items, page setup, colour palette, comments, suggestions
   Formatting/               Character, paragraph, style and list operations; list numbering
   IO/                       DOCX and ODT (ZIP + XML), HTML, Markdown, RTF and plain-text codecs, EPUB, clipboard archive
+  Collaboration/            Changes to rich text, recording them, a shared document's log, its iCloud records, summaries
+Config/                     Signing for debug builds (see Sharing from Xcode)
 Tools/make-icons.swift      Regenerates the app icon PNGs
 Tools/make-installer.sh     Builds the PuggleDocs.pkg installer
 Tools/release.sh            Releases the next version (see Releasing a new version)
@@ -156,6 +216,7 @@ Tools/release.sh            Releases the next version (see Releasing a new versi
 - **Suggestions** are a character attribute (who, when, insertion or deletion). In Suggesting mode, edits are intercepted before they reach the text: deletions become struck-through text and insertions are marked. They're drawn with layout-manager temporary attributes, so the text itself keeps its own formatting. Accepting or rejecting is a single undoable replacement.
 - **Paragraph styles** are stored per paragraph (`pdNamedStyle`) and written as real Word styles (`Heading1`, `Title`, …), so headings stay headings in Word and other word processors.
 - **Fonts a file asks for but the Mac doesn't have** are shown with a stand-in, and the original name is kept, so it survives saving.
+- **Collaboration.** A shared document is two zones in its owner's iCloud. The document zone holds a snapshot of the whole document now and then, and its log: one record per revision, each one change, named for its revision so that only one change can ever take it. Each Mac sends its changes one at a time, claiming the revision after the last it knows; when another Mac got there first, it applies that change and rewrites its own to follow it (operational transformation over rich text: keep, insert, delete and restyle, with each attribute's value encoded), so every Mac ends with the same text. That zone is shared with each person as edit or read-only, so iCloud itself refuses changes from people who may only comment. The talk zone, which everyone in the document can write to through a link kept in the document zone, holds the comments (each anchored to a range at a revision of the log) and who has it open. Changes are recorded by the text storage itself, a subclass that notes what each round of editing inserted, deleted or restyled, however it was done, along with the change that undoes it; while a document is shared, undo steps are those changes, rewritten as other people's arrive. Tables travel with identifiers, so a table typed into on another Mac stays one table. Each person's Mac also keeps an inbox zone shared by link with the people they work with, who leave a short summary there after a quiet spell; a subscription on it makes iCloud show the notification.
 
 ## Contributing
 

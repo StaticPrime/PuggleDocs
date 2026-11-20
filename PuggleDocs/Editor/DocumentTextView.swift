@@ -25,7 +25,14 @@ final class DocumentTextView: NSTextView {
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
     }
 
+    /// The shared document keeps undo while it's shared: the next keystroke starts a new undo step there too.
+    override func breakUndoCoalescing() {
+        super.breakUndoCoalescing()
+        editor?.collaboration?.breakTyping()
+    }
+
     override func mouseDown(with event: NSEvent) {
+        editor?.collaboration?.breakTyping()
         if let editor, editor.handleMarkerClick(event, in: self) { return }
         if let editor, editor.handleImageClick(event, in: self) { return }
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }

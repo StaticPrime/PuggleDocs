@@ -137,7 +137,7 @@ struct KeyboardShortcutsView: View {
                       ("Find next / previous", "⌘G / ⇧⌘G"), ("Word count", "⇧⌘C"), ("Show outline", "⌥⌘A"),
                       ("Paste without formatting", "⇧⌘V"), ("Print", "⌘P"), ("Zoom in / out", "⌘= / ⌘−")]),
         ("Comments", [("Insert comment", "⌥⌘M"), ("Post comment or reply", "⌘↩"), ("New line in a comment", "↩"),
-                      ("Cancel a comment", "Esc"), ("Comment history", "⇧⌥⌘A")]),
+                      ("Cancel a comment", "Esc"), ("Comment history", "⇧⌥⌘A"), ("Collaborate", "⌥⌘C")]),
     ]
 
     var body: some View {

@@ -47,6 +47,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
             self?.scheduleOutlineRefresh()
         }
         editor.onLinkClicked = { [weak self] index in self?.showLinkPreview(at: index) }
+        editor.onAccessChange = { [weak self] in
+            guard let self else { return }
+            ruler.isEnabled = state.isEditable
+            updateStatus()
+        }
         editor.onImageOptions = { [weak self] in self?.pdImageOptions(nil) }
         if let warnings = Optional(document.importWarnings), !warnings.isEmpty, let name = document.importedFileName {
             let list = warnings.map(\.userDescription).sorted().joined(separator: ", ")
@@ -162,6 +167,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
     private func changePageSetup(to setup: PageSetup, from old: PageSetup) {
         guard let document = puggleDocument, setup != old else { return }
         document.pageSetup = setup
+        document.onPageSetupEdited?()
         document.undoManager?.registerUndo(withTarget: self) { controller in
             controller.changePageSetup(to: old, from: setup)
         }
@@ -173,6 +179,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
     override func synchronizeWindowTitleWithDocumentName() {
         super.synchronizeWindowTitleWithDocumentName()
         updateStatus()
+        // A shared document of this person's that moved or was renamed is still found by its new name.
+        if let document = puggleDocument, let collaboration = document.collaboration, collaboration.isOwner, let url = document.fileURL {
+            CollaborationController.shared?.link(collaboration.id, to: url)
+        }
     }
 
     func updateStatus() {
@@ -183,7 +193,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
         }
         state.title = title
         state.formatBadge = document.fileURL == nil ? nil : document.format?.badge
-        if document.fileURL == nil {
+        if document.sharedCopy != nil {
+            state.saveStatus = .saved
+        } else if document.fileURL == nil {
             state.saveStatus = .draft
         } else {
             state.saveStatus = document.isDocumentEdited ? .edited : .saved
@@ -333,6 +345,53 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
         document?.printDocument(nil)
     }
 
+    // MARK: Collaboration
+
+    /// The Collaborate sheet: sharing the document, or seeing and changing who it's shared with.
+    func showCollaborate() {
+        guard let controller = CollaborationController.shared else { return }
+        let model = CollaborateModel(controller: controller, windowController: self)
+        presentSheet { dismiss in
+            model.done = dismiss
+            return CollaborateView(model: model)
+        }
+    }
+
+    /// The document stopped being shared: it carries on here as an ordinary document, saved in its file.
+    func sharingEnded() {
+        state.collaboration.reset()
+        editor.setAccess(.full)
+        editor.collaboration = nil
+        updateStatus()
+        state.banner = "“\(state.title)” is no longer shared. It’s saved on this Mac, and nobody else can open it any longer."
+    }
+
+    /// A document someone shared went away: its text goes at once, the window says why, and closes.
+    func sharedCopyWentAway(ownerName: String, reason: UnavailableReason) {
+        guard let document = puggleDocument, let window else { return }
+        let title = document.displayName ?? state.title
+        editor.setAccess(.locked)
+        for storage in [document.textStorage, document.headerStorage, document.footerStorage] {
+            storage.isRecording = false
+            storage.setAttributedString(NSAttributedString())
+        }
+        document.comments = []
+        editor.refreshAfterLoading()
+        state.collaboration.reset()
+        guard reason == .stopped else {
+            document.close()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "“\(title)” is no longer shared with you"
+        alert.informativeText = "\(ownerName) stopped sharing it, so it can’t be opened here any longer."
+        alert.addButton(withTitle: "OK")
+        window.attachedSheet.map { window.endSheet($0) }
+        alert.beginSheetModal(for: window) { _ in
+            MainActor.assumeIsolated { document.close() }
+        }
+    }
+
     func showCustomColorPanel(highlight: Bool) {
         colorPanelTargetsHighlight = highlight
         let panel = NSColorPanel.shared
@@ -466,6 +525,8 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         editor.setMode(EditingMode.allCases[tag])
         ruler.isEnabled = state.isEditable
     }
+
+    @objc func pdCollaborate(_ sender: Any?) { showCollaborate() }
 
     @objc func pdWordCount(_ sender: Any?) {
         let all = editor.statistics(selectionOnly: false)
@@ -665,10 +726,13 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         // While a comment is being typed, document commands stay out of the way.
         if window?.firstResponder is CommentTextView {
             return [#selector(pdZoomIn(_:)), #selector(pdZoomOut(_:)), #selector(pdActualSize(_:)), #selector(pdCommentHistory(_:)),
-                    #selector(pdShowShortcuts(_:)), #selector(pdDownload(_:))].contains(action)
+                    #selector(pdShowShortcuts(_:)), #selector(pdDownload(_:)), #selector(pdCollaborate(_:))].contains(action)
         }
         switch action {
-        case #selector(pdInsertComment(_:)): return state.mode != .viewing && !editor.isEditingHeaderFooter
+        case #selector(pdCollaborate(_:)):
+            menuItem.title = state.collaboration.isShared ? "Collaborators…" : "Collaborate…"
+            return state.access != .locked || state.collaboration.isShared
+        case #selector(pdInsertComment(_:)): return state.canComment && !editor.isEditingHeaderFooter
         case #selector(pdCommentHistory(_:)): check(editor.comments.model.showsHistory); return true
         case #selector(pdToggleBold(_:)): check(summary.isBold)
         case #selector(pdToggleItalic(_:)): check(summary.isItalic)
@@ -701,8 +765,12 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         case #selector(pdFindAndReplace(_:)), #selector(pdOpenLink(_:)), #selector(pdCopyLink(_:)): return true
         case #selector(pdSetMode(_:)):
             let modes = EditingMode.allCases
-            check(modes.indices.contains(menuItem.tag) && modes[menuItem.tag] == state.mode)
-            return modes.indices.contains(menuItem.tag)
+            guard modes.indices.contains(menuItem.tag) else { return false }
+            let mode = modes[menuItem.tag]
+            check(mode == state.mode)
+            // People who may only comment comment in place of editing, and can't suggest.
+            menuItem.title = mode == .editing && state.access == .commentOnly ? "Commenting" : mode.title
+            return state.access == .full || mode != .suggesting
         case #selector(pdAcceptAllSuggestions(_:)), #selector(pdRejectAllSuggestions(_:)):
             return editable && editor.hasSuggestions
         case #selector(pdSetZoom(_:)):
@@ -720,8 +788,10 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         case #selector(pdRemoveFooter(_:)): return editable && editor.footerStorage.length > 0
         case #selector(pdInsertPageBreak(_:)), #selector(pdBulletedList(_:)), #selector(pdNumberedList(_:)), #selector(pdChecklist(_:)), #selector(pdInsertImage(_:)):
             if editor.isEditingHeaderFooter { return false }
+        case #selector(pdRename(_:)):
+            return puggleDocument?.sharedCopy == nil
         case #selector(pdZoomIn(_:)), #selector(pdZoomOut(_:)), #selector(pdActualSize(_:)), #selector(pdZoomToFit(_:)),
-             #selector(pdWordCount(_:)), #selector(pdDownload(_:)), #selector(pdRename(_:)), #selector(pdShowShortcuts(_:)):
+             #selector(pdWordCount(_:)), #selector(pdDownload(_:)), #selector(pdShowShortcuts(_:)):
             return true
         default:
             break

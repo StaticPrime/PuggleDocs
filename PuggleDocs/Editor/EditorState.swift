@@ -51,6 +51,16 @@ enum SaveStatus: Equatable {
     }
 }
 
+/// What can be done to a document's text here.
+enum DocumentAccess: Equatable {
+    /// Everything: the document is this person's, or shared with them to edit.
+    case full
+    /// Shared with them to read and comment on: comments, but no changes to the text.
+    case commentOnly
+    /// Nothing for now: its shared copy is still on its way.
+    case locked
+}
+
 /// Everything the SwiftUI header and toolbar display for one window.
 @Observable
 final class EditorState {
@@ -82,8 +92,20 @@ final class EditorState {
     var outline: [OutlineEntry] = []
     var currentOutlineIndex: Int?
 
+    /// What sharing allows here.
+    var access: DocumentAccess = .full
+    /// Who the document is shared with, and how its shared copy is keeping up.
+    let collaboration = CollaborationState()
+
     /// Suggesting is editing too: typing and deleting become suggestions.
-    var isEditable: Bool { mode != .viewing }
+    var isEditable: Bool { mode != .viewing && access == .full }
+
+    /// Comments can be added outside Viewing mode, even by people who may only comment.
+    var canComment: Bool { mode != .viewing && access != .locked }
+
+    /// The mode as the toolbar shows it: people who may only comment are commenting.
+    var modeTitle: String { access == .commentOnly && mode != .viewing ? "Commenting" : mode.title }
+    var modeSymbol: String { access == .commentOnly && mode != .viewing ? "text.bubble" : mode.symbol }
 
     var zoomLabel: String { "\(Int((zoom * 100).rounded()))%" }
 }

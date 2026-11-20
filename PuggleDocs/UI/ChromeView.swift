@@ -38,6 +38,7 @@ protocol ChromeActions: AnyObject {
     func dismissBanner()
     func showLinkEditor()
     func insertImageFromFile()
+    func showCollaborate()
 }
 
 /// Header, toolbar and info banner above the ruler.
@@ -121,7 +122,8 @@ struct HeaderView: View {
                 .hoverBackground()
                 .focused($titleFocused)
                 .onSubmit { commitTitle() }
-                .help("Rename")
+                .disabled(!state.collaboration.isOwner && state.collaboration.isShared)
+                .help(state.collaboration.isShared && !state.collaboration.isOwner ? "Only its owner can rename it" : "Rename")
             if let badge = state.formatBadge {
                 Text(badge)
                     .font(.system(size: 10.5, weight: .semibold))
@@ -131,29 +133,16 @@ struct HeaderView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.secondaryText.opacity(0.5), lineWidth: 1))
                     .help("This file is stored in \(badge.dropFirst()) format")
             }
-            Image(systemName: state.saveStatus.symbol)
+            Image(systemName: statusSymbol)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.secondaryText)
-                .help(state.saveStatus.text)
+                .help(statusText)
             Spacer(minLength: 12)
-            Text(state.saveStatus.text)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.secondaryText)
-                .lineLimit(1)
-            ToolbarIconButton(symbol: "text.bubble", help: "Open comment history (⇧⌥⌘A)", isOn: comments.showsHistory) {
-                comments.showsHistory.toggle()
-            }
-            .popover(isPresented: $comments.showsHistory, arrowEdge: .bottom) {
-                CommentHistoryView(model: comments, controller: actions.editor.comments)
-            }
-            ToolbarIconButton(symbol: "clock.arrow.circlepath", help: "Open version history") { actions.showVersionHistory() }
-            ToolbarDropdown(help: "Download a copy", showsChevron: false, open: { actions.popUp(.download, from: $0) }) {
-                Label("Download", systemImage: "arrow.down.to.line")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(red: 0.0, green: 0.12, blue: 0.27))
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Capsule().fill(Color(red: 0.76, green: 0.87, blue: 1.0)))
+            // As the window narrows, the status words go first, then the buttons' words.
+            ViewThatFits(in: .horizontal) {
+                trailingControls(showsStatus: true, compact: false)
+                trailingControls(showsStatus: false, compact: false)
+                trailingControls(showsStatus: false, compact: true)
             }
         }
         .frame(height: TitlebarMetrics.rowHeight)
@@ -168,6 +157,67 @@ struct HeaderView: View {
         .onChange(of: state.renameRequest) { _, _ in titleFocused = true }
         .onExitCommand { titleText = state.title; titleFocused = false; actions.editor.focus() }
     }
+
+    private func trailingControls(showsStatus: Bool, compact: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            if showsStatus {
+                Text(statusText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            CollaboratorAvatars(state: state.collaboration)
+            ToolbarIconButton(symbol: "text.bubble", help: "Open comment history (⇧⌥⌘A)", isOn: comments.showsHistory) {
+                comments.showsHistory.toggle()
+            }
+            .popover(isPresented: $comments.showsHistory, arrowEdge: .bottom) {
+                CommentHistoryView(model: comments, controller: actions.editor.comments)
+            }
+            ToolbarIconButton(symbol: "clock.arrow.circlepath", help: "Open version history") { actions.showVersionHistory() }
+            Button { actions.showCollaborate() } label: {
+                Group {
+                    if compact {
+                        Image(systemName: collaborateSymbol)
+                    } else {
+                        Label("Collaborate", systemImage: collaborateSymbol)
+                    }
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, compact ? 10 : 12)
+                .frame(height: 30)
+                .background(Capsule().fill(Theme.accent))
+                .contentShape(Capsule())
+                .fixedSize()
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(state.collaboration.isShared ? "See and change who this document is shared with" : "Share this document with people to work on it together")
+            .accessibilityLabel("Collaborate")
+            ToolbarDropdown(help: "Download a copy", showsChevron: false, open: { actions.popUp(.download, from: $0) }) {
+                Group {
+                    if compact {
+                        Image(systemName: "arrow.down.to.line")
+                    } else {
+                        Label("Download", systemImage: "arrow.down.to.line")
+                    }
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color(red: 0.0, green: 0.12, blue: 0.27))
+                .padding(.horizontal, compact ? 10 : 10)
+                .frame(height: 30)
+                .background(Capsule().fill(Color(red: 0.76, green: 0.87, blue: 1.0)))
+                .fixedSize()
+            }
+        }
+    }
+
+    private var collaborateSymbol: String { state.collaboration.isShared ? "person.2.fill" : "person.badge.plus" }
+
+    /// While shared, how its iCloud copy is keeping up; otherwise how its file is.
+    private var statusText: String { state.collaboration.isShared ? state.collaboration.statusText : state.saveStatus.text }
+    private var statusSymbol: String { state.collaboration.isShared ? state.collaboration.statusSymbol : state.saveStatus.symbol }
 
     private func commitTitle() {
         let trimmed = titleText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -305,7 +355,7 @@ struct FormattingToolbar: View {
                 editor.setHighlight(color)
             } custom: { actions.showCustomColorPanel(highlight: true) }
             ToolbarIconButton(symbol: "link", help: "Insert link (⌘K)", isOn: summary.link != nil, isEnabled: editable) { actions.showLinkEditor() }
-            ToolbarIconButton(symbol: "plus.bubble", help: "Add comment (⌥⌘M)", isEnabled: state.mode != .viewing) {
+            ToolbarIconButton(symbol: "plus.bubble", help: "Add comment (⌥⌘M)", isEnabled: state.canComment) {
                 editor.comments.startDraft()
             }
             ToolbarIconButton(symbol: "photo", help: "Insert image", isEnabled: editable) { actions.insertImageFromFile() }
@@ -344,8 +394,8 @@ struct FormattingToolbar: View {
     private var modeControl: some View {
         ToolbarDropdown(help: "Editing mode", open: { actions.popUp(.mode, from: $0) }) {
             HStack(spacing: 5) {
-                Image(systemName: state.mode.symbol).font(.system(size: 13))
-                Text(state.mode.title).font(.system(size: 13))
+                Image(systemName: state.modeSymbol).font(.system(size: 13))
+                Text(state.modeTitle).font(.system(size: 13))
             }
             // Suggesting shows in green.
             .foregroundStyle(state.mode == .suggesting ? Color(red: 0.09, green: 0.50, blue: 0.22) : Theme.primaryText)
