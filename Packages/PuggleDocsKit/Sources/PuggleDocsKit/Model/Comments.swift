@@ -3,12 +3,15 @@ import AppKit
 public struct CommentReply: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var author: String
+    /// In a shared document, the iCloud identity of whoever wrote it.
+    public var authorID: String?
     public var date: Date
     public var text: String
 
-    public init(id: String = UUID().uuidString, author: String, date: Date = Date(), text: String) {
+    public init(id: String = UUID().uuidString, author: String, authorID: String? = nil, date: Date = Date(), text: String) {
         self.id = id
         self.author = author
+        self.authorID = authorID
         self.date = date
         self.text = text
     }
@@ -18,15 +21,18 @@ public struct CommentReply: Codable, Equatable, Sendable, Identifiable {
 public struct CommentThread: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var author: String
+    /// In a shared document, the iCloud identity of whoever wrote it.
+    public var authorID: String?
     public var date: Date
     public var text: String
     public var replies: [CommentReply]
     public var resolved: Bool
 
-    public init(id: String = UUID().uuidString, author: String, date: Date = Date(), text: String,
+    public init(id: String = UUID().uuidString, author: String, authorID: String? = nil, date: Date = Date(), text: String,
                 replies: [CommentReply] = [], resolved: Bool = false) {
         self.id = id
         self.author = author
+        self.authorID = authorID
         self.date = date
         self.text = text
         self.replies = replies
