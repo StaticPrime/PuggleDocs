@@ -29,6 +29,8 @@ final class CollaborationSelfTest {
     private var bensDocument: UUID?
     private var bensWindow: DocumentWindowController?
     private var startedNotices = 0
+    private var offlineText = ""
+    private var offlineComments = 0
 
     init(controller: DocumentWindowController) { self.controller = controller }
 
@@ -104,6 +106,27 @@ final class CollaborationSelfTest {
     }
 
     private var everythingSent: Bool { !(session?.hasUnsentChanges ?? true) }
+
+    /// A picture too big to travel inside a change record (its noise doesn't compress), as a pasted photo is.
+    private static let testPicture: Data = {
+        let width = 640, height = 480
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 3,
+                                         hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: width * 3, bitsPerPixel: 24),
+              let pixels = rep.bitmapData else { return Data() }
+        var seed: UInt32 = 20_261_120
+        for index in 0..<(width * height * 3) {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            pixels[index] = UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        return rep.representation(using: .png, properties: [:]) ?? Data()
+    }()
+
+    /// Whether the character at `index` is the test picture, drawn as an image.
+    private static func holdsTestPicture(_ storage: NSTextStorage, at index: Int) -> Bool {
+        guard index < storage.length, let attachment = storage.attribute(.attachment, at: index, effectiveRange: nil) as? NSTextAttachment
+        else { return false }
+        return attachment.attachmentCell is ImageAttachmentCell && ImageAttachments.info(attachment)?.data == testPicture
+    }
 
     /// Has the stand-in tell everyone in the window's document how it's shared, afresh.
     private func refreshSharing() {
@@ -200,6 +223,11 @@ final class CollaborationSelfTest {
             let index = (self.ana.text as NSString).range(of: "Cell").location
             guard index != NSNotFound, let table = TableModel.table(at: index, in: self.ana.storage) else { return false }
             return table.rows == 2 && table.columns == 2 && self.ana.text == self.storage.string
+        }
+        step("a picture they paste arrives as the same picture") {
+            self.ana.insertImage(Self.testPicture, at: 0)
+        } until: {
+            self.ana.text == self.storage.string && Self.holdsTestPicture(self.storage, at: 0)
         }
         step("undo takes back this Mac's typing, not theirs", here: true) {
             self.editor.activeTextView.setSelectedRange(NSRange(location: 0, length: 0))
@@ -333,6 +361,42 @@ final class CollaborationSelfTest {
             return toAna.count == 1 && toAna.first?.body == "Added 3 words."
         }
 
+        // MARK: Offline
+
+        step("when iCloud can't be reached, it can't be changed, and the window says why") {
+            self.cloud.isReachable = false
+        } until: {
+            self.editor.state.access == .offline && self.editor.textViews.allSatisfy { !$0.isEditable }
+                && self.state.statusText.hasPrefix("Offline") && (self.controller.state.banner ?? "").hasPrefix("You’re offline")
+                && self.controller.window?.undoManager == nil && self.editor.state.modeTitle == "Offline"
+                && !(self.controller.window?.validateUserInterfaceItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")) ?? true)
+                // Read-only, comments included: they show, without anything to add, answer or change them.
+                && self.editor.comments.model.isReadOnly && self.editor.comments.model.canComment
+                && !self.editor.comments.mayEdit(authorID: StandInCloud.me.id)
+        }
+        step("meanwhile typing and commenting change nothing, and nothing waits to be sent", here: true) {
+            self.offlineText = self.storage.string
+            self.offlineComments = self.document.comments.count
+            self.editor.activeTextView.setSelectedRange(NSRange(location: 0, length: 0))
+            self.type("Offline? ")
+            self.select("Goals")
+            self.editor.comments.startDraft()
+            self.editor.comments.model.draft?.text = "Offline comment"
+            self.editor.comments.commitDraft()
+            // Someone else comments while this Mac is away.
+            self.ana.comment("While you were away", on: "Goals")
+        } until: {
+            self.storage.string == self.offlineText && self.document.comments.count == self.offlineComments
+                && !(self.session?.hasUnsentChanges ?? true)
+        }
+        step("once iCloud's back, it can be changed again and catches up with what others did", timeout: 12) {
+            self.cloud.isReachable = true
+        } until: {
+            self.editor.state.access == .full && self.editor.textViews.allSatisfy(\.isEditable) && !self.state.statusText.hasPrefix("Offline")
+                && self.controller.state.banner == nil && self.controller.window?.undoManager === self.document.undoManager
+                && !self.editor.comments.model.isReadOnly && self.document.comments.contains { $0.text == "While you were away" }
+        }
+
         step("renaming it here renames it for everyone it's shared with") {
             self.controller.rename(to: "Renamed plan")
         } until: {
@@ -391,6 +455,30 @@ final class CollaborationSelfTest {
             self.ben.type("Update: ", at: 0)
         } until: {
             self.bensWindow?.editor.textStorage.string.hasPrefix("Update: Notes from Ben.") == true
+        }
+        step("a change iCloud passes over while reading still comes, and so do the ones after it", timeout: 12) {
+            guard let id = self.bensDocument else { return }
+            self.cloud.skippedRevisions = [(self.cloud.documents[id]?.changes.keys.max() ?? 0) + 1]
+            self.ben.type("Skipped? ", at: 0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.ben.type("After. ", at: 0) }
+        } until: {
+            guard let storage = self.bensWindow?.editor.textStorage else { return false }
+            return storage.string == self.ben.text && storage.string.hasPrefix("After. Skipped? ")
+        }
+        step("its owner's comments show up here as they're made, on their text") {
+            self.cloud.skippedRevisions = []
+            self.ben.comment("Dates are in the appendix", on: "Notes")
+        } until: {
+            guard let window = self.bensWindow, let document = window.puggleDocument,
+                  let thread = document.comments.first(where: { $0.text == "Dates are in the appendix" }),
+                  let range = CommentAnchors.ranges(in: window.editor.textStorage)[thread.id] else { return false }
+            return (window.editor.textStorage.string as NSString).substring(with: range) == "Notes" && window.editor.comments.isShown(thread.id)
+        }
+        step("a picture its owner pastes shows up here") {
+            self.ben.insertImage(Self.testPicture, at: self.ben.storage.length)
+        } until: {
+            guard let storage = self.bensWindow?.editor.textStorage, storage.string == self.ben.text, storage.length > 0 else { return false }
+            return Self.holdsTestPicture(storage, at: storage.length - 1)
         }
         step("its owner renaming it renames it here") {
             self.ben.rename("Ben’s renamed notes")

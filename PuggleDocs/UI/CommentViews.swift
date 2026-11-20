@@ -215,7 +215,7 @@ struct CommentCard: View {
             VStack(alignment: .leading, spacing: 14) {
                 CommentEntryView(author: thread.author, date: thread.date, text: thread.text, showsControls: active,
                                  isEditing: model.editing == .thread(threadID), editText: $model.editText,
-                                 onResolve: { controller.setResolved(threadID, true) },
+                                 onResolve: model.isReadOnly ? nil : { controller.setResolved(threadID, true) },
                                  canEdit: controller.mayEdit(authorID: thread.authorID),
                                  canDelete: controller.mayDelete(authorID: thread.authorID),
                                  onEdit: { edit(.thread(threadID)) },
@@ -232,7 +232,7 @@ struct CommentCard: View {
                                      onSave: { controller.saveEdit() },
                                      onCancelEdit: { controller.cancelEdit() })
                 }
-                if active, model.editing == nil {
+                if active, model.editing == nil, !model.isReadOnly {
                     VStack(alignment: .trailing, spacing: 8) {
                         CommentInput(text: $model.replyText, placeholder: "Reply", onSubmit: { controller.reply(to: threadID) },
                                      onCancel: { controller.activate(nil) })
@@ -287,11 +287,13 @@ struct SuggestionCard: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    CommentIconButton(symbol: "checkmark", help: "Accept suggestion") { _ in
-                        controller.resolveSuggestion(suggestionID, accept: true)
-                    }
-                    CommentIconButton(symbol: "xmark", help: "Reject suggestion") { _ in
-                        controller.resolveSuggestion(suggestionID, accept: false)
+                    if !model.isReadOnly {
+                        CommentIconButton(symbol: "checkmark", help: "Accept suggestion") { _ in
+                            controller.resolveSuggestion(suggestionID, accept: true)
+                        }
+                        CommentIconButton(symbol: "xmark", help: "Reject suggestion") { _ in
+                            controller.resolveSuggestion(suggestionID, accept: false)
+                        }
                     }
                 }
                 Text(Self.describe(suggestion))
@@ -489,7 +491,9 @@ struct CommentHistoryView: View {
                     Text("Resolved")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color(red: 0.09, green: 0.50, blue: 0.22))
-                    CommentTextButton(title: "Re-open") { controller.setResolved(thread.id, false) }
+                    if !model.isReadOnly {
+                        CommentTextButton(title: "Re-open") { controller.setResolved(thread.id, false) }
+                    }
                 }
             }
             Text(thread.text)

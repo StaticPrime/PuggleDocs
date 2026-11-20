@@ -221,7 +221,8 @@ enum DebugLaunchOptions {
     }
 }
 /// `-PDCollaborationDemo YES` (with `-PDStandInCloud YES`) shares the window's document on the stand-in "iCloud" with
-/// two people, who open it, type and comment, for screenshots of a shared document.
+/// two people, who open it, type and comment, for screenshots of a shared document. `-PDDemoOffline YES` then takes
+/// this Mac offline, to show a shared document while iCloud can't be reached.
 enum CollaborationDemo {
     static let ana = StandInPerson(Collaborator(id: "ana@example.com", name: "Ana Lopez", address: "ana@example.com"))
     static let ben = StandInPerson(Collaborator(id: "ben@example.com", name: "Ben Carter", address: "ben@example.com"))
@@ -248,6 +249,9 @@ enum CollaborationDemo {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                         ana.type("Updated by Ana: ", at: 0)
                         ben.comment("Can we add a date for each milestone?", on: "Milestones")
+                    }
+                    if UserDefaults.standard.bool(forKey: "PDDemoOffline") {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { StandInCloud.shared.isReachable = false }
                     }
                 }
             }

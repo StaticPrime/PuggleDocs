@@ -59,6 +59,10 @@ enum DocumentAccess: Equatable {
     case commentOnly
     /// Nothing for now: its shared copy is still on its way.
     case locked
+    /// A shared document whose changes can't be saved to iCloud just now (the Mac is offline, say): it can be read,
+    /// printed and copied, comments included, but nothing in it changes until iCloud takes changes again. Nothing is
+    /// kept to send later.
+    case offline
 }
 
 /// Everything the SwiftUI header and toolbar display for one window.
@@ -107,8 +111,14 @@ final class EditorState {
     var canComment: Bool { mode != .viewing && access != .locked }
 
     /// The mode as the toolbar shows it: people who may only comment are commenting.
-    var modeTitle: String { access == .commentOnly && mode != .viewing ? "Commenting" : mode.title }
-    var modeSymbol: String { access == .commentOnly && mode != .viewing ? "text.bubble" : mode.symbol }
+    var modeTitle: String {
+        if access == .offline { return "Offline" }
+        return access == .commentOnly && mode != .viewing ? "Commenting" : mode.title
+    }
+    var modeSymbol: String {
+        if access == .offline { return "icloud.slash" }
+        return access == .commentOnly && mode != .viewing ? "text.bubble" : mode.symbol
+    }
 
     var zoomLabel: String { "\(Int((zoom * 100).rounded()))%" }
 }

@@ -228,6 +228,19 @@ public final class SyncClient {
     /// Whether changes from the log are waiting for one that hasn't come.
     public var isMissingChanges: Bool { !early.isEmpty }
 
+    /// The revisions the changes waiting here need first: from the last one applied to the first that came ahead.
+    public var missingRevisions: ClosedRange<Int>? {
+        guard let first = early.keys.min(), first > revision + 1 else { return nil }
+        return (revision + 1)...(first - 1)
+    }
+
+    /// Drops the changes made here that aren't in the log yet, for starting over from a snapshot they can't follow.
+    public func discardPending() {
+        outstanding = nil
+        buffer = nil
+        sending = nil
+    }
+
     private func confirm(_ change: LoggedChange) {
         revision = change.revision
         remember(change.revision, change.change)

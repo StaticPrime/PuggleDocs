@@ -39,6 +39,7 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
     private var observers: [NSObjectProtocol] = []
     private var isFetching = false
     private var fetchesAgain = false
+    private var isSubscribedToInbox = false
     /// The system's invitation while it shows, and the document it's for.
     private var picker: NSSharingServicePicker?
     private var invitingDocument: UUID?
@@ -98,11 +99,9 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
         }
     }
 
-    /// Asks iCloud to say (quietly) whenever something shared changes, and to show a notification when someone leaves
-    /// a notice in this person's inbox.
+    /// Asks iCloud to say (quietly) whenever something shared changes. Asked at every start rather than remembered, so
+    /// subscriptions iCloud lost, or made for its other environment by a build from Xcode, are made again.
     private func subscribe(as me: Collaborator) async {
-        let key = "CollaborationSubscribed-\(me.id)"
-        guard !defaults.bool(forKey: key) else { return }
         do {
             for (database, name) in [(container.sharedCloudDatabase, "shared-changes"), (container.privateCloudDatabase, "private-changes")] {
                 let info = CKSubscription.NotificationInfo()
@@ -112,7 +111,6 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
                 let result = try await database.modifySubscriptions(saving: [subscription], deleting: [])
                 _ = try result.saveResults[name]?.get()
             }
-            defaults.set(true, forKey: key)
         } catch {
             // Asked again next time PuggleDocs opens; open documents look for changes as they go.
             collaborationLog.error("Subscribing to changes failed: \(error.localizedDescription, privacy: .public)")
@@ -528,12 +526,16 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
 
     private func prepareInbox(as me: Collaborator) async {
         let key = "CollaborationInbox-\(me.id)"
-        if let saved = defaults.url(forKey: key) {
-            inboxURL = saved
-        } else {
+        let database = container.privateCloudDatabase
+        let zone = Self.zone(CollaborationRecords.inboxZone)
+        do {
+            // The inbox's link as iCloud has it now, not as remembered: one remembered from a build that used iCloud's
+            // other environment, or from before the inbox was made again, leads nowhere.
+            guard let url = (try await database.record(for: Self.shareID(in: zone)) as? CKShare)?.url else { return }
+            defaults.set(url, forKey: key)
+            inboxURL = url
+        } catch let error as CKError where [.zoneNotFound, .unknownItem].contains(error.code) {
             do {
-                let database = container.privateCloudDatabase
-                let zone = Self.zone(CollaborationRecords.inboxZone)
                 let made = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: zone)], deleting: [])
                 _ = try made.saveResults[zone]?.get()
                 let share = CKShare(recordZoneID: zone)
@@ -548,6 +550,13 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
                 collaborationLog.error("Making the inbox for notices failed: \(error.localizedDescription, privacy: .public)")
                 return
             }
+        } catch {
+            // iCloud can't be reached just now: the link from last time does meanwhile.
+            guard let saved = defaults.url(forKey: key) else {
+                collaborationLog.error("Reading the inbox for notices failed: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+            inboxURL = saved
         }
         await subscribeToInbox(as: me)
         await cleanInbox()
@@ -557,8 +566,8 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
     /// environment that can only be asked once a notice has been left there (which adds the kind of record), so
     /// until it's done it's asked again at every look for changes.
     private func subscribeToInbox(as me: Collaborator) async {
-        let key = "CollaborationInboxSubscribed-\(me.id)"
-        guard inboxURL != nil, !defaults.bool(forKey: key) else { return }
+        // Made once each time PuggleDocs runs, not remembered, for the same reason as the other subscriptions.
+        guard inboxURL != nil, !isSubscribedToInbox else { return }
         do {
             let subscription = CKQuerySubscription(recordType: CollaborationRecords.noticeType, predicate: NSPredicate(value: true),
                                                    subscriptionID: "notices", options: [.firesOnRecordCreation])
@@ -573,7 +582,7 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
             subscription.notificationInfo = info
             let subscribed = try await container.privateCloudDatabase.modifySubscriptions(saving: [subscription], deleting: [])
             _ = try subscribed.saveResults["notices"]?.get()
-            defaults.set(true, forKey: key)
+            isSubscribedToInbox = true
         } catch {
             collaborationLog.notice("Notifications for notices aren't set up yet: \(error.localizedDescription, privacy: .public)")
         }
@@ -882,18 +891,42 @@ final class CloudKitChannel: CollaborationChannel {
         do {
             if documentRecord == nil { try await loadDocument() }
             try await fetchDocumentZone()
-            _ = await joinedTalkZone()
-            try await fetchTalkZone()
-        } catch let error as CKError where [.zoneNotFound, .userDeletedZone].contains(error.code) || (error.code == .unknownItem && documentRecord == nil)
-                    || (error.code == .permissionFailure && owner != nil) {
-            zoneWentAway()
-        } catch let error as CKError where error.code == .changeTokenExpired {
-            tokens = [:]
-            fetchesAgain = true
+            delegate?.channel(self, reachable: true)
         } catch {
-            // Tried again at the next look.
-            collaborationLog.error("Reading a shared document failed: \(error.localizedDescription, privacy: .public)")
+            if isConnectionProblem(error) { delegate?.channel(self, reachable: false) }
+            guard carriesOn(after: error, in: documentZone) else { return }
         }
+        // Comments and who's here are read even when the log couldn't be, this time.
+        guard isRunning, documentRecord != nil else { return }
+        _ = await joinedTalkZone()
+        do {
+            try await fetchTalkZone()
+        } catch {
+            if let talkZone { _ = carriesOn(after: error, in: talkZone) }
+        }
+    }
+
+    /// What a failed read means: the document went (answers false), the place reached in a zone's changes expired (it's
+    /// read again from the start), or something passing (tried again at the next look).
+    private func carriesOn(after error: Error, in zone: CKRecordZone.ID) -> Bool {
+        if let error = error as? CKError {
+            if zone == documentZone, [.zoneNotFound, .userDeletedZone].contains(error.code) || (error.code == .unknownItem && documentRecord == nil)
+                || (error.code == .permissionFailure && owner != nil) {
+                zoneWentAway()
+                return false
+            }
+            if error.code == .changeTokenExpired {
+                tokens[zone] = nil
+                fetchesAgain = true
+                return true
+            }
+        }
+        // Being offline is said in the window; anything else is worth the log.
+        if !isConnectionProblem(error) {
+            let what = zone == documentZone ? "a shared document" : "comments on a shared document"
+            collaborationLog.error("Reading \(what, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        }
+        return true
     }
 
     /// The `Document` record with its snapshot: where a Mac joining starts from.
@@ -911,24 +944,83 @@ final class CloudKitChannel: CollaborationChannel {
         delegate?.channel(self, loaded: snapshot, info: info)
     }
 
+    /// What a Mac reads of the `Document` and `Change` records in a document zone.
+    private static let documentZoneKeys: [CKRecord.FieldKey] = [CollaborationRecords.infoKey, CollaborationRecords.revisionKey,
+                                                                CollaborationRecords.changeIDKey, CollaborationRecords.authorKey, "authorName",
+                                                                CollaborationRecords.changeKey, "changeFile"]
+
     private func fetchDocumentZone() async throws {
         var changes: [LoggedChange] = []
+        var unread: [CKRecord.ID] = []
         var retitled: String?
-        try await readZone(documentZone, desiredKeys: [CollaborationRecords.infoKey, CollaborationRecords.revisionKey, CollaborationRecords.changeIDKey,
-                                                       CollaborationRecords.authorKey, "authorName", CollaborationRecords.changeKey, "changeFile"]) { record in
+        try await readZone(documentZone, desiredKeys: Self.documentZoneKeys) { record in
             if let share = record as? CKShare {
                 sharingChanged(share)
-            } else if record.recordType == CollaborationRecords.changeType, let change = Self.loggedChange(from: record) {
-                changes.append(change)
+            } else if record.recordType == CollaborationRecords.changeType {
+                if let change = Self.loggedChange(from: record) { changes.append(change) } else { unread.append(record.recordID) }
             } else if record.recordType == CollaborationRecords.documentType {
                 if let info = CollaborationRecords.decode(SharedDocumentInfo.self, from: record[CollaborationRecords.infoKey] as? Data) {
                     if let old = self.info, old.title != info.title { retitled = info.title }
                     self.info = info
                 }
             }
+        } failed: { id, error in
+            if CollaborationRecords.revision(ofChange: id.recordName) != nil { unread.append(id) }
+            collaborationLog.error("Reading \(id.recordName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         } deleted: { _ in }
+        // A change that didn't come whole with the rest (a big one, whose file didn't come along) is read on its own; one
+        // that still can't be is left for the Mac to find missing and ask for again.
+        if !unread.isEmpty { changes += await readChanges(unread) }
         if !changes.isEmpty { delegate?.channel(self, received: changes) }
         if let retitled { delegate?.channel(self, retitled: retitled) }
+    }
+
+    /// Change records read by name, the way the snapshot is; any that can't be read are logged, saying why.
+    private func readChanges(_ ids: [CKRecord.ID]) async -> [LoggedChange] {
+        var found: [LoggedChange] = []
+        do {
+            let results = try await database.records(for: ids, desiredKeys: Self.documentZoneKeys)
+            for id in ids {
+                switch results[id] {
+                case let .success(record)?:
+                    if let change = Self.loggedChange(from: record) {
+                        found.append(change)
+                    } else {
+                        collaborationLog.error("\(id.recordName, privacy: .public) can't be read: \(Self.describe(record), privacy: .public)")
+                    }
+                case let .failure(error)?:
+                    collaborationLog.error("\(id.recordName, privacy: .public) can't be fetched: \(error.localizedDescription, privacy: .public)")
+                case nil:
+                    collaborationLog.error("\(id.recordName, privacy: .public) isn't in iCloud")
+                }
+            }
+        } catch {
+            collaborationLog.error("Reading changes by name failed: \(error.localizedDescription, privacy: .public)")
+        }
+        return found
+    }
+
+    /// What a change record holds, for the log when it can't be read.
+    private static func describe(_ record: CKRecord) -> String {
+        let inline = (record[CollaborationRecords.changeKey] as? Data).map { "\($0.count) bytes" } ?? "none"
+        guard let asset = record["changeFile"] as? CKAsset else { return "inline \(inline), no file" }
+        guard let url = asset.fileURL else { return "inline \(inline), file not downloaded" }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int).map { "\($0) bytes" } ?? "missing"
+        return "inline \(inline), file \(size)"
+    }
+
+    func fetchChanges(_ revisions: ClosedRange<Int>) {
+        guard isRunning else { return }
+        let ids = revisions.prefix(400).map { CKRecord.ID(recordName: CollaborationRecords.changeName($0), zoneID: documentZone) }
+        Task {
+            let found = await readChanges(ids)
+            if !found.isEmpty { delegate?.channel(self, received: found) }
+            guard found.count < ids.count, isRunning else { return }
+            // Some can't be had: the latest snapshot, if it's past them, is the way on.
+            collaborationLog.error("Changes \(revisions.lowerBound)–\(revisions.upperBound) can't be read here; reading the latest snapshot")
+            documentRecord = nil
+            fetchSoon()
+        }
     }
 
     private func fetchTalkZone() async throws {
@@ -947,6 +1039,8 @@ final class CloudKitChannel: CollaborationChannel {
                 presence[person] = info
                 people.append(Presence(person: person, info: info, date: record.modificationDate ?? Date()))
             }
+        } failed: { id, error in
+            collaborationLog.error("Reading \(id.recordName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         } deleted: { deletion in
             if deletion.recordType == CollaborationRecords.commentType {
                 comments[deletion.recordID.recordName] = nil
@@ -958,11 +1052,16 @@ final class CloudKitChannel: CollaborationChannel {
     }
 
     private func readZone(_ zone: CKRecordZone.ID, desiredKeys: [CKRecord.FieldKey]?, _ changed: (CKRecord) -> Void,
-                          deleted: (CKDatabase.RecordZoneChange.Deletion) -> Void) async throws {
+                          failed: (CKRecord.ID, Error) -> Void, deleted: (CKDatabase.RecordZoneChange.Deletion) -> Void) async throws {
         var token = tokens[zone]
         while true {
             let result = try await database.recordZoneChanges(inZoneWith: zone, since: token, desiredKeys: desiredKeys)
-            for case let .success(modification) in result.modificationResultsByID.values { changed(modification.record) }
+            for (id, outcome) in result.modificationResultsByID {
+                switch outcome {
+                case let .success(modification): changed(modification.record)
+                case let .failure(error): failed(id, error)
+                }
+            }
             result.deletions.forEach(deleted)
             token = result.changeToken
             tokens[zone] = token
@@ -996,6 +1095,7 @@ final class CloudKitChannel: CollaborationChannel {
             try? data.write(to: url)
             file = url
             record["changeFile"] = CKAsset(fileURL: url)
+            collaborationLog.notice("Sending change \(change.revision) as a file of \(data.count) bytes")
         } else {
             record[CollaborationRecords.changeKey] = data
         }
@@ -1008,13 +1108,25 @@ final class CloudKitChannel: CollaborationChannel {
                 _ = try result.saveResults[record.recordID]?.get()
                 completion(.claimed)
             } catch {
-                let result = Self.claimResult(error, recordID: record.recordID)
+                var result = Self.claimResult(error, recordID: record.recordID)
+                if case .failed = result, Self.wasTaken(error, recordID: record.recordID),
+                   let existing = await readChanges([record.recordID]).first {
+                    // A big change took the revision first: its file doesn't come with the answer, so it's read whole.
+                    result = .taken(existing)
+                }
                 if case .failed = result {
                     collaborationLog.error("Sending change \(change.revision) failed: \(error.localizedDescription, privacy: .public)")
                 }
                 completion(result)
             }
         }
+    }
+
+    /// Whether saving a change failed because a change of that revision is in the log already.
+    private static func wasTaken(_ error: Error, recordID: CKRecord.ID) -> Bool {
+        guard var error = error as? CKError else { return false }
+        if error.code == .partialFailure, let inner = error.partialErrorsByItemID?[recordID] as? CKError { error = inner }
+        return error.code == .serverRecordChanged
     }
 
     private static func claimResult(_ error: Error, recordID: CKRecord.ID) -> ClaimResult {

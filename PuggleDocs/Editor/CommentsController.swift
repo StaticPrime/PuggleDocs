@@ -49,6 +49,8 @@ final class CommentsModel {
     var authorName = CommentAuthor.name
     /// False in Viewing mode.
     var canComment = true
+    /// While a shared document can't save to iCloud: comments show, but none can be added, answered or changed.
+    var isReadOnly = false
 
     func thread(_ id: String) -> CommentThread? { threads.first { $0.id == id } }
 
@@ -119,6 +121,14 @@ final class CommentsController {
         if let active = model.activeSuggestion, !suggestions.contains(where: { $0.id == active }) { model.activeSuggestion = nil }
         let canComment = editor.state.canComment
         if model.canComment != canComment { model.canComment = canComment }
+        let isReadOnly = editor.state.access == .offline
+        if model.isReadOnly != isReadOnly {
+            model.isReadOnly = isReadOnly
+            if isReadOnly {
+                model.draft = nil
+                model.editing = nil
+            }
+        }
         if let active = model.activeID, !isShown(active) { model.activeID = nil }
         if let draft = model.draft, NSMaxRange(draft.range) > storage.length { model.draft = nil }
         updateHighlights()
@@ -226,8 +236,16 @@ final class CommentsController {
     // MARK: Commands
 
     /// Starts a new comment on the selection (or the word at the caret).
+    /// Comments don't change while a shared document can't save to iCloud: nothing is kept to send later. Says so.
+    private func refusesWhileOffline() -> Bool {
+        guard editor.state.access == .offline else { return false }
+        NSSound.beep()
+        editor.collaboration?.explainOffline()
+        return true
+    }
+
     func startDraft() {
-        guard model.canComment, !editor.isEditingHeaderFooter else { return }
+        guard model.canComment, !editor.isEditingHeaderFooter, !refusesWhileOffline() else { return }
         let textView = editor.activeTextView
         var range = textView.selectedRange()
         if range.length == 0 { range = textView.selectionRange(forProposedRange: range, granularity: .selectByWord) }
@@ -254,7 +272,7 @@ final class CommentsController {
     }
 
     func commitDraft() {
-        guard let draft = model.draft else { return }
+        guard let draft = model.draft, !refusesWhileOffline() else { return }
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let range = NSIntersectionRange(draft.range, NSRange(location: 0, length: storage.length))
@@ -323,6 +341,7 @@ final class CommentsController {
     }
 
     func resolveSuggestion(_ id: String, accept: Bool) {
+        guard !refusesWhileOffline() else { return }
         if model.activeSuggestion == id { model.activeSuggestion = nil }
         editor.resolveSuggestions([id], accept: accept)
         editor.focus()
@@ -342,7 +361,7 @@ final class CommentsController {
 
     func reply(to id: String) {
         let text = model.replyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !refusesWhileOffline() else { return }
         model.replyText = ""
         let author = CommentAuthor.name
         let authorID = editor.collaboration?.me?.id
@@ -350,12 +369,14 @@ final class CommentsController {
     }
 
     func setResolved(_ id: String, _ resolved: Bool) {
+        guard !refusesWhileOffline() else { return }
         if resolved, model.activeID == id { model.activeID = nil }
         update(id, actionName: resolved ? "Resolve Comment" : "Re-open Comment") { $0.resolved = resolved }
     }
 
     /// Asks first; undo brings the thread back.
     func delete(_ id: String) {
+        guard !refusesWhileOffline() else { return }
         guard let window = editor.scrollView.window else {
             remove(id)
             return
@@ -379,10 +400,12 @@ final class CommentsController {
     }
 
     func deleteReply(_ replyID: String, in id: String) {
+        guard !refusesWhileOffline() else { return }
         update(id, actionName: "Delete Reply") { thread in thread.replies.removeAll { $0.id == replyID } }
     }
 
     func beginEditing(_ editing: CommentsModel.Editing) {
+        guard !refusesWhileOffline() else { return }
         switch editing {
         case .thread(let id):
             model.editText = model.thread(id)?.text ?? ""
@@ -393,7 +416,7 @@ final class CommentsController {
     }
 
     func saveEdit() {
-        guard let editing = model.editing else { return }
+        guard let editing = model.editing, !refusesWhileOffline() else { return }
         let text = model.editText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         model.editing = nil
@@ -411,12 +434,15 @@ final class CommentsController {
 
     /// In a shared document, people edit only what they wrote (the owner, what was written before it was shared).
     func mayEdit(authorID: String?) -> Bool {
+        guard editor.state.access != .offline else { return false }
         guard let collaboration = editor.collaboration, let me = collaboration.me?.id else { return true }
         return authorID == me || (authorID == nil && collaboration.isOwner)
     }
 
     /// And delete what they wrote, or anything if they can edit the document.
-    func mayDelete(authorID: String?) -> Bool { mayEdit(authorID: authorID) || editor.state.access == .full }
+    func mayDelete(authorID: String?) -> Bool {
+        editor.state.access != .offline && (mayEdit(authorID: authorID) || editor.state.access == .full)
+    }
 
     func setAuthorName(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -642,7 +668,7 @@ final class CommentsController {
     func updateAddButton() {
         let textView = editor.activeTextView
         let selection = textView.selectedRange()
-        let show = model.canComment && model.draft == nil && selection.length > 0 && !editor.isEditingHeaderFooter
+        let show = model.canComment && !model.isReadOnly && model.draft == nil && selection.length > 0 && !editor.isEditingHeaderFooter
             && editor.scrollView.window?.firstResponder is DocumentTextView
         guard show, let top = lineTop(at: selection.location), let pageRight = editor.canvas.pages.first?.frame.maxX else {
             addButton?.isHidden = true

@@ -90,8 +90,14 @@ public enum ImageAttachments {
     @discardableResult
     public static func installCell(_ attachment: NSTextAttachment, maxWidth: CGFloat? = nil) -> Bool {
         if attachment.attachmentCell is ImageAttachmentCell { return true }
-        guard let info = info(attachment), let picture = NSImage(data: info.data) else { return false }
-        if attachment.contents == nil {
+        guard var info = info(attachment), let picture = NSImage(data: info.data) else { return false }
+        if info.type.conforms(to: .tiff) || info.type.conforms(to: .bmp), let png = portableData(info) {
+            // Pasted pictures often come as TIFF or BMP, uncompressed and many times the size of the same picture as
+            // PNG: they're kept, saved and shared as PNG.
+            info = Info(data: png.data, type: png.type, size: info.size)
+            attachment.contents = info.data
+            attachment.fileType = info.type.identifier
+        } else if attachment.contents == nil {
             attachment.contents = info.data
             attachment.fileType = info.type.identifier
         }

@@ -135,6 +135,10 @@ protocol CollaborationChannel: AnyObject {
     /// How often to look for changes while nothing pushes them: often while others are in the document.
     var pollInterval: TimeInterval { get set }
 
+    /// Reads the changes at `revisions` again, for a Mac that's missing them. When they can't all be had (long gone, or
+    /// unreadable), the document's latest snapshot is read afresh instead.
+    func fetchChanges(_ revisions: ClosedRange<Int>)
+
     /// Claims the change's revision of the log for it.
     func claim(_ change: LoggedChange, completion: @escaping (ClaimResult) -> Void)
     /// Keeps a snapshot of the whole document, for people joining later to start from.
@@ -162,6 +166,12 @@ protocol CollaborationChannelDelegate: AnyObject {
     /// Its owner gave it a new name.
     func channel(_ channel: CollaborationChannel, retitled title: String)
     func channel(_ channel: CollaborationChannel, becameUnavailable reason: UnavailableReason)
+    /// Whether iCloud answered the latest look for changes (false when it couldn't be reached at all).
+    func channel(_ channel: CollaborationChannel, reachable: Bool)
+}
+
+extension CollaborationChannelDelegate {
+    func channel(_ channel: CollaborationChannel, reachable: Bool) {}
 }
 
 /// Sharing in a copy of PuggleDocs that can't reach iCloud for it: every request is turned down, saying why.
@@ -226,6 +236,7 @@ private final class UnavailableChannel: CollaborationChannel {
     func start() {}
     func stop() {}
     func fetchSoon() {}
+    func fetchChanges(_ revisions: ClosedRange<Int>) {}
     func claim(_ change: LoggedChange, completion: @escaping (ClaimResult) -> Void) { completion(.failed(CollaborationError.notShared)) }
     func saveSnapshot(_ snapshot: SyncSnapshot, title: String) {}
     func setTitle(_ title: String) {}

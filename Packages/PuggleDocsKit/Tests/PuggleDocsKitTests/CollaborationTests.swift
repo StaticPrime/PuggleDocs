@@ -280,6 +280,23 @@ struct AttributeCodingTests {
         #expect(attachment?.bounds.size == CGSize(width: 40, height: 20))
         #expect((copy.attribute(.attachment, at: 1, effectiveRange: nil) as? PageFieldAttachment)?.kind == .pageCount)
     }
+
+    @Test func picturesPastedAsTIFFAreKeptAsPNG() throws {
+        let tiff = try #require(NSImage(size: NSSize(width: 60, height: 40), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }.tiffRepresentation)
+        // As pasting a picture makes it: a file wrapper with the TIFF in it, and no drawing cell yet.
+        let wrapper = FileWrapper(regularFileWithContents: tiff)
+        wrapper.preferredFilename = "Pasted Graphic.tiff"
+        let attachment = NSTextAttachment(fileWrapper: wrapper)
+        #expect(ImageAttachments.installCell(attachment))
+        let info = try #require(ImageAttachments.info(attachment))
+        #expect(info.type == .png && ImageAttachments.sniff(info.data) == .png)
+        #expect(info.data.count < tiff.count)
+        #expect(attachment.attachmentCell is ImageAttachmentCell)
+    }
 }
 
 /// Macs editing one document through a log, delivering in random orders.
@@ -388,6 +405,34 @@ struct SyncTests {
         #expect(ben.client.position(4, at: 0, priority: false) == 6)
         // And a place here is at the log's latest revision before Ben's own typing.
         #expect(ben.client.logPosition(13) == 12)
+    }
+
+    @Test func aChangeThatDidNotComeIsMissedUntilItDoes() {
+        let start = NSAttributedString(string: "", attributes: DocumentDefaults.typingAttributes)
+        let ana = Mac("ana", text: start)
+        let ben = Mac("ben", text: start)
+        let log = Log()
+        for word in ["one ", "two ", "three "] {
+            ana.storage.replaceCharacters(in: NSRange(location: ana.storage.length, length: 0), with: word)
+            ana.send(to: log)
+        }
+        // The second change doesn't come with the others: nothing after it can be applied, and it's the one asked for.
+        ben.apply(ben.client.receive([log.changes[1]!, log.changes[3]!]))
+        #expect(ben.storage.string == "one ")
+        #expect(ben.client.isMissingChanges)
+        #expect(ben.client.missingRevisions == 2...2)
+        ben.apply(ben.client.receive([log.changes[2]!]))
+        #expect(ben.storage.string == "one two three ")
+        #expect(!ben.client.isMissingChanges && ben.client.missingRevisions == nil)
+    }
+
+    @Test func startingOverDropsWhatWasWaitingToGo() {
+        let ana = Mac("ana", text: NSAttributedString(string: "abc", attributes: DocumentDefaults.typingAttributes))
+        ana.storage.replaceCharacters(in: NSRange(location: 3, length: 0), with: "d")
+        ana.storage.replaceCharacters(in: NSRange(location: 4, length: 0), with: "e")
+        #expect(ana.client.hasPending)
+        ana.client.discardPending()
+        #expect(!ana.client.hasPending && ana.client.nextToSend() == nil)
     }
 }
 

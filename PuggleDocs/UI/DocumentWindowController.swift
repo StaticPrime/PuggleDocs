@@ -3,6 +3,19 @@ import PuggleDocsKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A document's window. While its shared document can't save to iCloud it has no undo manager, so Undo and Redo do
+/// nothing and the document's own steps wait, untouched, until iCloud's back.
+final class DocumentWindow: NSWindow {
+    var pausesUndo: () -> Bool = { false }
+
+    override var undoManager: UndoManager? { pausesUndo() ? nil : super.undoManager }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if pausesUndo(), item.action == Selector(("undo:")) || item.action == Selector(("redo:")) { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+}
+
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, ChromeActions {
     let state = EditorState()
     let editor: EditorController
@@ -19,9 +32,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
     init(document: PuggleDocument) {
         editor = EditorController(document: document, state: state)
         find = FindController(editor: editor)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 880),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
+        let window = DocumentWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 880),
+                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                    backing: .buffered, defer: false)
+        window.pausesUndo = { [weak state] in state?.access == .offline }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none

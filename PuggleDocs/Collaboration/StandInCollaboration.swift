@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import CloudKit
 import PuggleDocsKit
 
 /// Stands in for iCloud in debug runs (`-PDStandInCloud YES`) and the self-test: shared documents kept in memory and
@@ -56,6 +57,17 @@ final class StandInCloud {
     private var channels: [WeakChannel] = []
     private var services: [WeakService] = []
     var latency: TimeInterval = 0.05
+    /// Revisions of the log this Mac's reading passes over, as iCloud can when a change's file doesn't come along: they
+    /// come only when asked for by name.
+    var skippedRevisions: Set<Int> = []
+    /// Whether this Mac can reach the stand-in "iCloud". While it can't, everything it asks fails as iCloud's requests
+    /// do offline; the simulated people on other Macs carry on.
+    var isReachable = true {
+        didSet {
+            guard isReachable != oldValue else { return }
+            for item in channels { item.channel?.fetchSoon() }
+        }
+    }
 
     private struct WeakChannel { weak var channel: StandInChannel? }
     private struct WeakService { weak var service: StandInCollaboration? }
@@ -291,8 +303,18 @@ final class StandInChannel: CollaborationChannel {
 
     func stop() { isRunning = false }
 
+    /// This Mac, while the self-test has it offline.
+    private var isCutOff: Bool { me.id == StandInCloud.me.id && !cloud.isReachable }
+
+    private static var offline: Error { CKError(.networkUnavailable) }
+
     func fetchSoon() {
         guard isRunning, !gone else { return }
+        if isCutOff {
+            delegate?.channel(self, reachable: false)
+            return
+        }
+        defer { if isRunning, !gone { delegate?.channel(self, reachable: true) } }
         guard let document, document.people.contains(where: { $0.id == me.id }) else {
             gone = true
             isRunning = false
@@ -308,10 +330,9 @@ final class StandInChannel: CollaborationChannel {
             delegate?.channel(self, retitled: document.title)
         }
         let fresh = document.changes.values.filter { !delivered.contains($0.revision) }
-        if !fresh.isEmpty {
-            fresh.forEach { delivered.insert($0.revision) }
-            delegate?.channel(self, received: fresh)
-        }
+        fresh.forEach { delivered.insert($0.revision) }
+        let read = fresh.filter { me.id != StandInCloud.me.id || !cloud.skippedRevisions.contains($0.revision) }
+        if !read.isEmpty { delegate?.channel(self, received: read) }
         let comments = document.comments.values.filter { $0.version > seenVersion }.map(\.comment)
         let deleted = document.deletedComments.filter { $0.version > seenVersion }.map(\.id)
         if !comments.isEmpty || !deleted.isEmpty { delegate?.channel(self, receivedComments: comments, deleted: deleted) }
@@ -325,8 +346,20 @@ final class StandInChannel: CollaborationChannel {
         DispatchQueue.main.asyncAfter(deadline: .now() + cloud.latency) { work() }
     }
 
+    func fetchChanges(_ revisions: ClosedRange<Int>) {
+        later { [self] in
+            guard isRunning, !isCutOff, let document else { return }
+            let found = revisions.compactMap { document.changes[$0] }
+            if !found.isEmpty { delegate?.channel(self, received: found) }
+            guard found.count < revisions.count else { return }
+            delegate?.channel(self, loaded: document.snapshot, info: SharedDocumentInfo(title: document.title, ownerName: document.owner.name,
+                                                                                      snapshotRevision: document.snapshot.revision))
+        }
+    }
+
     func claim(_ change: LoggedChange, completion: @escaping (ClaimResult) -> Void) {
         later { [self] in
+            guard !isCutOff else { return completion(.failed(Self.offline)) }
             guard let document else { return completion(.failed(CollaborationError.notShared)) }
             let permission = document.owner.id == me.id ? .edit : document.people.first { $0.id == me.id }?.permission
             guard permission == .edit else { return completion(.notAllowed) }
@@ -339,12 +372,12 @@ final class StandInChannel: CollaborationChannel {
     }
 
     func saveSnapshot(_ snapshot: SyncSnapshot, title: String) {
-        guard let document, snapshot.revision > document.snapshot.revision else { return }
+        guard !isCutOff, let document, snapshot.revision > document.snapshot.revision else { return }
         document.snapshot = snapshot
     }
 
     func setTitle(_ title: String) {
-        guard let document, document.title != title else { return }
+        guard !isCutOff, let document, document.title != title else { return }
         document.title = title
         seenTitle = title
         cloud.changed(id)
@@ -353,6 +386,7 @@ final class StandInChannel: CollaborationChannel {
 
     func save(_ comment: SharedComment, base: CommentThread?, completion: @escaping (Result<SharedComment, Error>) -> Void) {
         later { [self] in
+            guard !isCutOff else { return completion(.failure(Self.offline)) }
             guard let document else { return completion(.failure(CollaborationError.notShared)) }
             var saved = comment
             if let server = document.comments[comment.thread.id]?.comment, server.thread != base, base != nil {
@@ -367,14 +401,14 @@ final class StandInChannel: CollaborationChannel {
     }
 
     func deleteComment(_ id: String) {
-        guard let document else { return }
+        guard !isCutOff, let document else { return }
         document.comments[id] = nil
         document.deletedComments.append((id, document.bump()))
         cloud.changed(self.id)
     }
 
     func setPresence(viewing: Bool, isOwner: Bool, permission: CollaboratorPermission) {
-        guard let document else { return }
+        guard !isCutOff, let document else { return }
         let info = PresenceInfo(name: me.name, isViewing: viewing, inboxURL: nil, isOwner: isOwner, permission: permission)
         document.presence[me.id] = (Presence(person: me.id, info: info, date: Date()), document.bump())
         cloud.changed(id)
@@ -453,6 +487,15 @@ final class StandInPerson: CollaborationChannelDelegate {
 
     func delete(_ range: NSRange) {
         storage.deleteCharacters(in: range)
+    }
+
+    /// Pastes a picture at `location`, as one image character, the way a Mac pasting one does.
+    func insertImage(_ data: Data, at location: Int) {
+        guard let attachment = ImageAttachments.make(data: data, maxWidth: 400) else { return }
+        var attributes = DocumentDefaults.typingAttributes
+        attributes[.attachment] = attachment
+        storage.replaceCharacters(in: NSRange(location: min(location, storage.length), length: 0),
+                                  with: NSAttributedString(string: "\u{FFFC}", attributes: attributes))
     }
 
     /// Comments on the first place `phrase` appears.

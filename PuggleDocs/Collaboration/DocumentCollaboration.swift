@@ -121,9 +121,21 @@ final class DocumentCollaboration: NSObject {
     private var lastSnapshotRevision = 0
     private var retryDelay: TimeInterval = 1
     private var retryScheduled = false
-    private var isOffline = false
-    private var hasShownSendProblem = false
+    /// Why changes can't be saved to iCloud just now, when they can't. Meanwhile the window takes none: nothing made
+    /// in a shared document is kept to send later.
+    private enum Blocked: Equatable {
+        /// iCloud can't be reached: the Mac is offline, say.
+        case offline
+        /// iCloud turned a change down, saying why.
+        case refused(String)
+    }
+    private var blocked: Blocked?
+    /// The window's banner as this session last set it, so coming back online takes away only its own.
+    private var blockedBanner: String?
     private var heartbeat: Timer?
+    /// Looking again for a change of the log that others came ahead of, longer apart each time.
+    private var gapCheck: DispatchWorkItem?
+    private var gapDelay: TimeInterval = 1
 
     init(id: UUID, isOwner: Bool, ownerID: String?, controller: CollaborationController, document: PuggleDocument,
          windowController: DocumentWindowController) {
@@ -238,6 +250,8 @@ final class DocumentCollaboration: NSObject {
         heartbeat = nil
         snapshotWork?.cancel()
         noticeWork?.cancel()
+        gapCheck?.cancel()
+        gapCheck = nil
         for stream in Stream.allCases {
             storage(stream)?.isRecording = false
             storage(stream)?.onEdit = nil
@@ -272,7 +286,7 @@ final class DocumentCollaboration: NSObject {
         switch phase {
         case .connecting: editor.setAccess(.locked)
         case .ended: break
-        case .live: editor.setAccess(canEdit ? .full : .commentOnly)
+        case .live: editor.setAccess(blocked != nil ? .offline : (canEdit ? .full : .commentOnly))
         }
     }
 
@@ -330,6 +344,7 @@ final class DocumentCollaboration: NSObject {
                 afterConfirm()
             case let .taken(existing):
                 apply(client.sendTaken(next.id, by: existing))
+                lookForGap()
                 markOnline()
             case .notAllowed:
                 client.sendFailed(next.id)
@@ -344,23 +359,18 @@ final class DocumentCollaboration: NSObject {
         }
     }
 
+    /// A change went in: whatever kept the window from being changed is over.
     private func markOnline() {
         retryDelay = 1
-        if isOffline {
-            isOffline = false
-            updateState()
-        }
+        guard blocked != nil else { return }
+        blocked = nil
+        cameBack()
     }
 
-    /// Sending failed: tried again in a while, longer each time. When iCloud turned the change down rather than
-    /// couldn't be reached, the window says why, once.
+    /// Sending failed: the window stops taking changes, saying why, and the change is tried again in a while, longer
+    /// each time. (It was made while iCloud could still be reached; it goes in, merged, once it can be again.)
     private func markOffline(because error: Error) {
-        isOffline = true
-        if !isConnectionProblem(error), !hasShownSendProblem {
-            hasShownSendProblem = true
-            windowController?.state.banner = "Changes to “\(title)” can’t be saved to iCloud: \(error.localizedDescription)"
-        }
-        updateState()
+        block(isConnectionProblem(error) ? .offline : .refused(error.localizedDescription))
         guard !retryScheduled else { return }
         retryScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
@@ -369,6 +379,44 @@ final class DocumentCollaboration: NSObject {
             flush()
         }
         retryDelay = min(retryDelay * 2, 30)
+    }
+
+    /// Changes can't be saved to iCloud: the window stops taking any, and says why, until they can again. It's still
+    /// looked at for others' changes, more often, so it knows as soon as iCloud's back.
+    private func block(_ reason: Blocked) {
+        guard blocked != reason else { return }
+        blocked = reason
+        channel?.pollInterval = 5
+        applyPermission()
+        updateState()
+        explainOffline()
+    }
+
+    /// Says in the window why it can't be changed just now (again, when someone tries).
+    func explainOffline() {
+        guard let blocked else { return }
+        let banner = switch (blocked, phase) {
+        case (.offline, .connecting):
+            "You’re offline, so “\(title)” can’t be opened from iCloud yet. It opens as soon as iCloud can be reached."
+        case (.offline, _):
+            "You’re offline, so changes to “\(title)” can’t be saved. You can still read it, print it or save a copy, and editing comes back as soon as iCloud can be reached."
+        case let (.refused(reason), _):
+            "Changes to “\(title)” can’t be saved to iCloud right now (\(reason)). You can still read it, print it or save a copy."
+        }
+        blockedBanner = banner
+        windowController?.state.banner = banner
+    }
+
+    /// Changes can be saved again: the window takes them, catches up with what others did meanwhile, and its own
+    /// message about it goes.
+    private func cameBack() {
+        if let banner = windowController?.state.banner, banner == blockedBanner { windowController?.state.banner = nil }
+        blockedBanner = nil
+        applyPermission()
+        updateState()
+        titleChanged()
+        channel?.fetchSoon()
+        flush()
     }
 
     /// iCloud turned a change down: this person may no longer edit. Their changes not yet in go; the text is put back
@@ -701,6 +749,8 @@ final class DocumentCollaboration: NSObject {
               let anchor = comment.anchor, let client else { return }
         if anchor.revision > client.revision {
             waitingAnchors[comment.thread.id] = comment
+            let id = comment.thread.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.anchorByQuote(id) }
             return
         }
         waitingAnchors[comment.thread.id] = nil
@@ -723,6 +773,21 @@ final class DocumentCollaboration: NSObject {
 
     private func anchorWaitingComments() {
         for comment in waitingAnchors.values { anchorIfNeeded(comment) }
+    }
+
+    /// A thread whose revision of the log is slow to come: shown meanwhile on the text it quotes, when that's here.
+    private func anchorByQuote(_ id: String) {
+        guard let comment = waitingAnchors[id], let storage = document?.textStorage, CommentAnchors.ranges(in: storage)[id] == nil,
+              let quote = comment.anchor?.quote, !quote.isEmpty else { return }
+        let found = (storage.string as NSString).range(of: quote)
+        guard found.location != NSNotFound else { return }
+        waitingAnchors[id] = nil
+        storage.isRecording = false
+        storage.beginEditing()
+        CommentAnchors.add(id, to: storage, range: found)
+        storage.endEditing()
+        storage.isRecording = true
+        editor?.comments.reload()
     }
 
     // MARK: Telling the others
@@ -763,15 +828,21 @@ final class DocumentCollaboration: NSObject {
         }
         switch phase {
         case .connecting:
-            state.statusText = "Opening the shared copy from iCloud…"
-            state.statusSymbol = "icloud.and.arrow.down"
+            if blocked == .offline {
+                state.statusText = "Offline · It opens when iCloud can be reached"
+                state.statusSymbol = "icloud.slash"
+            } else {
+                state.statusText = "Opening the shared copy from iCloud…"
+                state.statusSymbol = "icloud.and.arrow.down"
+            }
         case .ended:
             state.statusText = "No longer shared"
             state.statusSymbol = "icloud.slash"
         case .live:
-            if isOffline {
-                state.statusText = "Can’t reach iCloud. Your changes are kept here until it’s back."
-                state.statusSymbol = "exclamationmark.icloud"
+            if let blocked {
+                state.statusText = blocked == .offline ? "Offline · Changes can’t be saved until iCloud can be reached"
+                    : "Changes can’t be saved to iCloud right now"
+                state.statusSymbol = blocked == .offline ? "icloud.slash" : "exclamationmark.icloud"
             } else if client?.hasPending == true {
                 state.statusText = "Saving to iCloud…"
                 state.statusSymbol = "arrow.triangle.2.circlepath.icloud"
@@ -828,11 +899,20 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
         // A Mac that's following the log needs no snapshot; one starting, or one so far behind that the changes it's
         // missing are gone, starts from it.
         if let client, phase == .live, client.revision >= snapshot.revision || !client.isMissingChanges { return }
+        let catchingUp = phase == .live
+        if catchingUp, let client, client.hasPending {
+            // What's waiting to go was made on text the snapshot moves past, so it can't follow.
+            client.discardPending()
+            windowController?.state.banner = "Your latest changes to “\(title)” couldn’t be kept while it caught up with iCloud."
+        }
         load(snapshot)
+        if catchingUp { restoreComments() }
         let early = earlyChanges
         earlyChanges = []
-        if !early.isEmpty, let client { apply(client.receive(early)) }
+        // With the changes that came ahead of the ones the snapshot now covers.
+        if let client { apply(client.receive(early)) }
         if phase == .connecting { goLive() }
+        lookForGap()
     }
 
     func channel(_ channel: CollaborationChannel, received changes: [LoggedChange]) {
@@ -841,8 +921,44 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
             return
         }
         apply(client.receive(changes))
+        lookForGap()
         afterConfirm()
         flush()
+    }
+
+    /// Changes came ahead of one that hasn't (iCloud passed over it while reading, say). If it still hasn't a moment
+    /// later, it's asked for by name, and failing that the document starts again from its latest snapshot; until then
+    /// nothing after it can be shown.
+    private func lookForGap() {
+        guard phase == .live, client?.missingRevisions != nil else {
+            gapCheck?.cancel()
+            gapCheck = nil
+            gapDelay = 1
+            return
+        }
+        guard gapCheck == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            gapCheck = nil
+            guard phase == .live, let missing = self.client?.missingRevisions else { return lookForGap() }
+            collaborationLog.notice("Asking again for changes \(missing.lowerBound)–\(missing.upperBound)")
+            channel?.fetchChanges(missing)
+            gapDelay = min(gapDelay * 2, 60)
+            lookForGap()
+        }
+        gapCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + gapDelay, execute: work)
+    }
+
+    /// After starting over from a snapshot: the comment threads as iCloud last had them, back on their text.
+    private func restoreComments() {
+        guard let document else { return }
+        isApplyingRemote = true
+        let threads = serverComments.values.map(\.thread).sorted { $0.date < $1.date }
+        if document.comments != threads { document.comments = threads }
+        isApplyingRemote = false
+        for comment in serverComments.values { anchorIfNeeded(comment) }
+        editor?.comments.reload()
     }
 
     func channel(_ channel: CollaborationChannel, retitled title: String) {
@@ -878,6 +994,15 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
             }
         }
         updateState()
+    }
+
+    func channel(_ channel: CollaborationChannel, reachable: Bool) {
+        if reachable {
+            // iCloud answers again. (A change it turned down is over only when one goes in.)
+            if blocked == .offline { markOnline() }
+        } else {
+            block(.offline)
+        }
     }
 
     func channel(_ channel: CollaborationChannel, becameUnavailable reason: UnavailableReason) {
