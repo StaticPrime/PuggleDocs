@@ -179,9 +179,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, Chro
     override func synchronizeWindowTitleWithDocumentName() {
         super.synchronizeWindowTitleWithDocumentName()
         updateStatus()
-        // A shared document of this person's that moved or was renamed is still found by its new name.
+        // A shared document of this person's that moved or was renamed is still found by its new name, and everyone it's
+        // shared with sees the new name.
         if let document = puggleDocument, let collaboration = document.collaboration, collaboration.isOwner, let url = document.fileURL {
             CollaborationController.shared?.link(collaboration.id, to: url)
+            collaboration.titleChanged()
         }
     }
 
@@ -528,6 +530,33 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
 
     @objc func pdCollaborate(_ sender: Any?) { showCollaborate() }
 
+    /// Leaves a document someone shared with this person, once they say so: it closes, and they're out of it.
+    @objc func pdLeaveShared(_ sender: Any?) {
+        guard let document = puggleDocument, let session = document.collaboration, !session.isOwner, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Leave “\(state.title)”?"
+        alert.informativeText = "It closes on this Mac, and you’re no longer in it. \(state.collaboration.ownerName) can share it with you again."
+        alert.addButton(withTitle: "Leave")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            MainActor.assumeIsolated {
+                CollaborationController.shared?.service.leave(session.id) { error in
+                    if let error {
+                        let problem = NSAlert()
+                        problem.messageText = "You couldn’t leave “\(self.state.title)”."
+                        problem.informativeText = error.localizedDescription
+                        problem.beginSheetModal(for: window)
+                        return
+                    }
+                    session.end()
+                    document.close()
+                }
+            }
+        }
+    }
+
     @objc func pdWordCount(_ sender: Any?) {
         let all = editor.statistics(selectionOnly: false)
         let selection = editor.hasSelection ? editor.statistics(selectionOnly: true) : nil
@@ -730,8 +759,13 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         }
         switch action {
         case #selector(pdCollaborate(_:)):
+            // Only a document's owner shares it, and changes who it's shared with.
+            menuItem.isHidden = !state.showsCollaborateButton
             menuItem.title = state.collaboration.isShared ? "Collaborators…" : "Collaborate…"
-            return state.access != .locked || state.collaboration.isShared
+            return state.showsCollaborateButton && (state.access != .locked || state.collaboration.isShared)
+        case #selector(pdLeaveShared(_:)):
+            menuItem.isHidden = state.showsCollaborateButton
+            return puggleDocument?.collaboration?.isOwner == false
         case #selector(pdInsertComment(_:)): return state.canComment && !editor.isEditingHeaderFooter
         case #selector(pdCommentHistory(_:)): check(editor.comments.model.showsHistory); return true
         case #selector(pdToggleBold(_:)): check(summary.isBold)

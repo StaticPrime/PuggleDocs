@@ -77,6 +77,7 @@ import PuggleDocsKit
     func pdAcceptAllSuggestions(_ sender: Any?)
     func pdRejectAllSuggestions(_ sender: Any?)
     func pdCollaborate(_ sender: Any?)
+    func pdLeaveShared(_ sender: Any?)
 }
 
 enum MenuKind: String, CaseIterable {
@@ -179,6 +180,7 @@ enum MenuBuilder {
             item("Make a copy", #selector(NSDocument.duplicate(_:)), "s", [.command, .shift], symbol: "plus.square.on.square"),
             .separator(),
             item("Collaborate…", #selector(DocumentCommands.pdCollaborate(_:)), "c", [.command, .option], symbol: "person.2"),
+            item("Leave shared document…", #selector(DocumentCommands.pdLeaveShared(_:)), symbol: "rectangle.portrait.and.arrow.right"),
             sharedDocumentsMenu(),
             .separator(),
             item("Save", #selector(NSDocument.save(_:)), "s", symbol: "square.and.arrow.down"),
@@ -440,6 +442,15 @@ final class SharedDocumentsMenu: NSObject, NSMenuDelegate {
             item.isEnabled = false
             menu.addItem(item)
         }
+        menu.addItem(.separator())
+        let link = NSMenuItem(title: "Open Invitation Link…", action: #selector(openLink(_:)), keyEquivalent: "")
+        link.target = self
+        link.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+        menu.addItem(link)
+    }
+
+    @objc private func openLink(_ sender: Any?) {
+        CollaborationController.shared?.askForInvitationLink()
     }
 
     private func sectionHeader(_ title: String) -> NSMenuItem {

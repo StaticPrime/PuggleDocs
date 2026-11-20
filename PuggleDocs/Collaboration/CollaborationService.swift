@@ -118,6 +118,8 @@ protocol CollaborationService: AnyObject {
     func stopSharing(_ id: UUID, completion: @escaping (Error?) -> Void)
     /// Leaves a document someone shared with this person.
     func leave(_ id: UUID, completion: @escaping (Error?) -> Void)
+    /// Joins a document from its invitation link, pasted into PuggleDocs rather than clicked.
+    func open(link url: URL, completion: @escaping (Result<SharedDocumentEntry, Error>) -> Void)
 
     /// Joins the conversation around a shared document, this person's or someone else's (`owner`).
     func connect(_ id: UUID, owner: String?, delegate: CollaborationChannelDelegate) -> CollaborationChannel
@@ -137,11 +139,13 @@ protocol CollaborationChannel: AnyObject {
     func claim(_ change: LoggedChange, completion: @escaping (ClaimResult) -> Void)
     /// Keeps a snapshot of the whole document, for people joining later to start from.
     func saveSnapshot(_ snapshot: SyncSnapshot, title: String)
+    /// Gives the document a new name, for everyone it's shared with (its owner's to do).
+    func setTitle(_ title: String)
     /// Saves a comment thread. `base` is the thread as last read, to merge with if someone else changed it meanwhile.
     func save(_ comment: SharedComment, base: CommentThread?, completion: @escaping (Result<SharedComment, Error>) -> Void)
     func deleteComment(_ id: String)
-    /// Tells the others whether this person has the document open.
-    func setPresence(viewing: Bool)
+    /// Tells the others whether this person has the document open, and who they are in it.
+    func setPresence(viewing: Bool, isOwner: Bool, permission: CollaboratorPermission)
     /// Leaves a notification for each of `people` (by iCloud identity) whose inbox is known.
     func sendNotice(title: String, body: String, to people: [String])
 }
@@ -155,6 +159,8 @@ protocol CollaborationChannelDelegate: AnyObject {
     func channel(_ channel: CollaborationChannel, receivedComments comments: [SharedComment], deleted: [String])
     func channel(_ channel: CollaborationChannel, receivedPresence presence: [Presence])
     func channel(_ channel: CollaborationChannel, sharingChanged sharing: DocumentSharing)
+    /// Its owner gave it a new name.
+    func channel(_ channel: CollaborationChannel, retitled title: String)
     func channel(_ channel: CollaborationChannel, becameUnavailable reason: UnavailableReason)
 }
 
@@ -201,6 +207,10 @@ final class UnavailableCollaboration: CollaborationService {
     func stopSharing(_ id: UUID, completion: @escaping (Error?) -> Void) { completion(CollaborationError.unavailable(reason)) }
     func leave(_ id: UUID, completion: @escaping (Error?) -> Void) { completion(CollaborationError.unavailable(reason)) }
 
+    func open(link url: URL, completion: @escaping (Result<SharedDocumentEntry, Error>) -> Void) {
+        completion(.failure(CollaborationError.unavailable(reason)))
+    }
+
     func connect(_ id: UUID, owner: String?, delegate: CollaborationChannelDelegate) -> CollaborationChannel {
         UnavailableChannel(delegate: delegate)
     }
@@ -218,10 +228,11 @@ private final class UnavailableChannel: CollaborationChannel {
     func fetchSoon() {}
     func claim(_ change: LoggedChange, completion: @escaping (ClaimResult) -> Void) { completion(.failed(CollaborationError.notShared)) }
     func saveSnapshot(_ snapshot: SyncSnapshot, title: String) {}
+    func setTitle(_ title: String) {}
     func save(_ comment: SharedComment, base: CommentThread?, completion: @escaping (Result<SharedComment, Error>) -> Void) {
         completion(.failure(CollaborationError.notShared))
     }
     func deleteComment(_ id: String) {}
-    func setPresence(viewing: Bool) {}
+    func setPresence(viewing: Bool, isOwner: Bool, permission: CollaboratorPermission) {}
     func sendNotice(title: String, body: String, to people: [String]) {}
 }

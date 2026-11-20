@@ -100,6 +100,9 @@ final class EditorState {
     /// Suggesting is editing too: typing and deleting become suggestions.
     var isEditable: Bool { mode != .viewing && access == .full }
 
+    /// Only a document's owner shares it: people it's shared with don't get the Collaborate button.
+    var showsCollaborateButton: Bool { !collaboration.isShared || collaboration.isOwner }
+
     /// Comments can be added outside Viewing mode, even by people who may only comment.
     var canComment: Bool { mode != .viewing && access != .locked }
 

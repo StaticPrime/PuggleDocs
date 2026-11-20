@@ -22,6 +22,9 @@ final class CollaborationSelfTest {
     private let cloud = StandInCloud.shared
     private let ana = StandInPerson(Collaborator(id: "ana@example.com", name: "Ana Lopez", address: "ana@example.com"))
     private let ben = StandInPerson(Collaborator(id: "ben@example.com", name: "Ben Carter", address: "ben@example.com"))
+    private let cy = StandInPerson(Collaborator(id: "cy@example.com", name: "Cy Park", address: "cy@example.com"))
+    private var linkedDocument: UUID?
+    private var linkRefused = false
     private var model: CollaborateModel!
     private var bensDocument: UUID?
     private var bensWindow: DocumentWindowController?
@@ -101,6 +104,13 @@ final class CollaborationSelfTest {
     }
 
     private var everythingSent: Bool { !(session?.hasUnsentChanges ?? true) }
+
+    /// Has the stand-in tell everyone in the window's document how it's shared, afresh.
+    private func refreshSharing() {
+        guard let id = session?.id, let document = cloud.documents[id] else { return }
+        document.sharingVersion += 1
+        cloud.changed(id)
+    }
 
     private func defineSteps() {
         // MARK: Sharing a document of this person's
@@ -220,6 +230,22 @@ final class CollaborationSelfTest {
             return others.count == 2 && ana.initials == "AL" && self.state.isViewing(ana)
         }
 
+        step("when iCloud doesn't say who people are, the header still names them") {
+            self.cloud.hidesIdentities = true
+            self.refreshSharing()
+        } until: {
+            guard self.state.collaborators.contains(where: { $0.id.hasPrefix("hidden-") }) else { return false }
+            let others = self.state.others
+            guard let ana = others.first(where: { $0.displayName == "Ana Lopez" }) else { return false }
+            return ana.initials == "AL" && self.state.isViewing(ana) && !others.contains { $0.displayName == "Someone" }
+        }
+        step("and iCloud's names come back when it says them") {
+            self.cloud.hidesIdentities = false
+            self.refreshSharing()
+        } until: {
+            !self.state.collaborators.contains { $0.id.hasPrefix("hidden-") } && self.state.others.contains { $0.id == "ana@example.com" }
+        }
+
         // MARK: Comments
 
         step("their comment shows here, on its text") {
@@ -307,6 +333,13 @@ final class CollaborationSelfTest {
             return toAna.count == 1 && toAna.first?.body == "Added 3 words."
         }
 
+        step("renaming it here renames it for everyone it's shared with") {
+            self.controller.rename(to: "Renamed plan")
+        } until: {
+            self.cloud.documents[self.session?.id ?? UUID()]?.title == "Renamed plan" && self.controller.state.title == "Renamed plan"
+                && self.controller.state.showsCollaborateButton
+        }
+
         // MARK: Stopping
 
         step("stopping sharing keeps the document here, and closes it for the others") {
@@ -340,8 +373,12 @@ final class CollaborationSelfTest {
             window.editor.comments.commitDraft()
         } until: {
             guard let window = self.bensWindow else { return false }
+            let collaborate = NSMenuItem(title: "Collaborate…", action: #selector(DocumentCommands.pdCollaborate(_:)), keyEquivalent: "")
+            let leave = NSMenuItem(title: "Leave", action: #selector(DocumentCommands.pdLeaveShared(_:)), keyEquivalent: "")
             return window.state.access == .commentOnly && window.editor.textViews.allSatisfy { !$0.isEditable }
                 && window.state.modeTitle == "Commenting" && self.ben.comments.values.contains { $0.thread.text == "Thanks for these" }
+                && !window.state.showsCollaborateButton && !window.validateMenuItem(collaborate) && collaborate.isHidden
+                && window.validateMenuItem(leave) && !leave.isHidden
         }
         step("typing in it changes nothing") {
             guard let window = self.bensWindow else { return }
@@ -354,6 +391,11 @@ final class CollaborationSelfTest {
             self.ben.type("Update: ", at: 0)
         } until: {
             self.bensWindow?.editor.textStorage.string.hasPrefix("Update: Notes from Ben.") == true
+        }
+        step("its owner renaming it renames it here") {
+            self.ben.rename("Ben’s renamed notes")
+        } until: {
+            self.bensWindow?.state.title == "Ben’s renamed notes" && self.bensWindow?.puggleDocument?.displayName == "Ben’s renamed notes"
         }
         step("it can still be printed, downloaded and copied") {} until: {
             guard let window = self.bensWindow, let document = window.puggleDocument else { return false }
@@ -374,6 +416,27 @@ final class CollaborationSelfTest {
         }
         step("its window closes") {} until: {
             !NSApp.windows.contains { ($0.windowController as? DocumentWindowController)?.puggleDocument?.sharedCopy != nil }
+        }
+
+        // MARK: An invitation link pasted in
+
+        step("an invitation link pasted into PuggleDocs opens its document") {
+            let id = self.cy.share(title: "Cy’s notes", text: "Anyone with this link can read it.", with: [], access: .anyoneWithLink)
+            self.linkedDocument = id
+            CollaborationController.shared.openInvitationLink(URL(string: "https://share.pugglesoft.invalid/\(id.uuidString.lowercased())")!)
+        } until: {
+            NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }.contains {
+                $0.puggleDocument?.sharedCopy?.id == self.linkedDocument && $0.editor.textStorage.string == "Anyone with this link can read it."
+                    && $0.state.access == .commentOnly
+            } && CollaborationController.shared.sharedWithMe.contains { $0.id == self.linkedDocument }
+        }
+        step("a link to a document shared only with other people doesn't open") {
+            let id = self.cy.share(title: "Cy’s private notes", text: "Only for Ana.", with: [], access: .invited)
+            CollaborationController.shared.openInvitationLink(URL(string: "https://share.pugglesoft.invalid/\(id.uuidString.lowercased())")!) { error in
+                self.linkRefused = error != nil
+            }
+        } until: {
+            self.linkRefused
         }
     }
 }

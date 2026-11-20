@@ -47,6 +47,8 @@ final class StandInCloud {
     }
 
     private(set) var documents: [UUID: Document] = [:]
+    /// Whether the people in a share go unnamed and unidentified, as iCloud can leave them.
+    var hidesIdentities = false
     /// The names of the simulated people, by address, as iCloud would know them.
     var directory: [String: String] = [:]
     /// Notices left for people: who for, and what they said.
@@ -97,7 +99,14 @@ final class StandInCloud {
 
     func sharing(of document: Document, for person: String) -> DocumentSharing {
         let me = document.people.first { $0.id == person }
-        return DocumentSharing(id: document.id, title: document.title, owner: document.owner, collaborators: document.people,
+        var people = document.people
+        if hidesIdentities {
+            people = people.enumerated().map { index, someone in
+                someone.id == person ? someone
+                    : Collaborator(id: "hidden-\(index)", name: "", isOwner: someone.isOwner, permission: someone.permission, status: someone.status)
+            }
+        }
+        return DocumentSharing(id: document.id, title: document.title, owner: people.first(where: \.isOwner) ?? document.owner, collaborators: people,
                                access: document.access, linkPermission: document.linkPermission,
                                url: URL(string: "https://share.pugglesoft.invalid/\(document.id.uuidString.lowercased())"),
                                myPermission: document.owner.id == person ? .edit : (me?.permission ?? .comment),
@@ -216,6 +225,25 @@ final class StandInCollaboration: CollaborationService {
         }
     }
 
+    /// The stand-in's links end in the document's identifier. Anyone with the link joins a document shared that way.
+    func open(link url: URL, completion: @escaping (Result<SharedDocumentEntry, Error>) -> Void) {
+        later { [self] in
+            guard let id = UUID(uuidString: url.lastPathComponent), let document = cloud.documents[id] else {
+                return completion(.failure(CollaborationError.failed("That link isn’t to a document shared from PuggleDocs.")))
+            }
+            if !document.people.contains(where: { $0.id == me.id }) {
+                guard document.access == .anyoneWithLink else {
+                    return completion(.failure(CollaborationError.failed("That link doesn’t open for the Apple ID this Mac is signed in to iCloud with.")))
+                }
+                document.people.append(Collaborator(id: me.id, name: me.name, address: me.address, permission: document.linkPermission, status: .joined))
+                document.sharingVersion += 1
+                cloud.changed(id)
+                cloud.announce()
+            }
+            completion(.success(SharedDocumentEntry(id: id, title: document.title, ownerName: document.owner.name, ownerID: document.owner.id)))
+        }
+    }
+
     func connect(_ id: UUID, owner: String?, delegate: CollaborationChannelDelegate) -> CollaborationChannel {
         StandInChannel(cloud: cloud, me: me, id: id, delegate: delegate)
     }
@@ -232,6 +260,7 @@ final class StandInChannel: CollaborationChannel {
     private var seenVersion = 0
     private var seenSharing = -1
     private var gone = false
+    private var seenTitle: String?
     var pollInterval: TimeInterval = 15
 
     init(cloud: StandInCloud, me: Collaborator, id: UUID, delegate: CollaborationChannelDelegate) {
@@ -252,6 +281,7 @@ final class StandInChannel: CollaborationChannel {
                 return
             }
             seenSharing = document.sharingVersion
+            seenTitle = document.title
             delegate?.channel(self, sharingChanged: cloud.sharing(of: document, for: me.id))
             delegate?.channel(self, loaded: document.snapshot, info: SharedDocumentInfo(title: document.title, ownerName: document.owner.name,
                                                                                           snapshotRevision: document.snapshot.revision))
@@ -272,6 +302,10 @@ final class StandInChannel: CollaborationChannel {
         if document.sharingVersion != seenSharing {
             seenSharing = document.sharingVersion
             delegate?.channel(self, sharingChanged: cloud.sharing(of: document, for: me.id))
+        }
+        if let seenTitle, seenTitle != document.title {
+            self.seenTitle = document.title
+            delegate?.channel(self, retitled: document.title)
         }
         let fresh = document.changes.values.filter { !delivered.contains($0.revision) }
         if !fresh.isEmpty {
@@ -309,6 +343,14 @@ final class StandInChannel: CollaborationChannel {
         document.snapshot = snapshot
     }
 
+    func setTitle(_ title: String) {
+        guard let document, document.title != title else { return }
+        document.title = title
+        seenTitle = title
+        cloud.changed(id)
+        cloud.announce()
+    }
+
     func save(_ comment: SharedComment, base: CommentThread?, completion: @escaping (Result<SharedComment, Error>) -> Void) {
         later { [self] in
             guard let document else { return completion(.failure(CollaborationError.notShared)) }
@@ -331,9 +373,10 @@ final class StandInChannel: CollaborationChannel {
         cloud.changed(self.id)
     }
 
-    func setPresence(viewing: Bool) {
+    func setPresence(viewing: Bool, isOwner: Bool, permission: CollaboratorPermission) {
         guard let document else { return }
-        document.presence[me.id] = (Presence(person: me.id, info: PresenceInfo(name: me.name, isViewing: viewing, inboxURL: nil), date: Date()), document.bump())
+        let info = PresenceInfo(name: me.name, isViewing: viewing, inboxURL: nil, isOwner: isOwner, permission: permission)
+        document.presence[me.id] = (Presence(person: me.id, info: info, date: Date()), document.bump())
         cloud.changed(id)
     }
 
@@ -377,16 +420,16 @@ final class StandInPerson: CollaborationChannelDelegate {
         let channel = service.connect(id, owner: nil, delegate: self)
         self.channel = channel
         channel.start()
-        channel.setPresence(viewing: true)
+        channel.setPresence(viewing: true, isOwner: false, permission: .edit)
     }
 
     /// Shares a document of theirs with `people`, each as they're allowed, and keeps it open.
-    func share(title: String, text: String, with people: [(Collaborator, CollaboratorPermission)]) -> UUID {
+    func share(title: String, text: String, with people: [(Collaborator, CollaboratorPermission)], access: LinkAccess = .invited) -> UUID {
         let id = UUID()
         let body = NSAttributedString(string: text, attributes: DocumentDefaults.typingAttributes)
         let snapshot = SyncSnapshot(revision: 0, body: coder.insertion(of: body), header: TextDelta(), footer: TextDelta(), pageSetup: .letter, anchors: [:])
         let document = StandInCloud.Document(id: id, title: title, owner: Collaborator(id: person.id, name: person.name, address: person.address, isOwner: true),
-                                             access: .invited, linkPermission: .comment, snapshot: snapshot)
+                                             access: access, linkPermission: .comment, snapshot: snapshot)
         for (someone, permission) in people {
             document.people.append(Collaborator(id: someone.id, name: someone.name, address: someone.address, permission: permission, status: .joined))
         }
@@ -394,6 +437,9 @@ final class StandInPerson: CollaborationChannelDelegate {
         join(id)
         return id
     }
+
+    /// Renames a document of theirs.
+    func rename(_ title: String) { channel?.setTitle(title) }
 
     func stopSharing() {
         guard let documentID else { return }
@@ -478,6 +524,8 @@ final class StandInPerson: CollaborationChannelDelegate {
     func channel(_ channel: CollaborationChannel, receivedPresence presence: [Presence]) {}
 
     func channel(_ channel: CollaborationChannel, sharingChanged sharing: DocumentSharing) { self.sharing = sharing }
+
+    func channel(_ channel: CollaborationChannel, retitled title: String) {}
 
     func channel(_ channel: CollaborationChannel, becameUnavailable reason: UnavailableReason) { isGone = true }
 }

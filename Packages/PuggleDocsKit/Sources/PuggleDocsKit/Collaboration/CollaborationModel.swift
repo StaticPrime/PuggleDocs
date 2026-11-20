@@ -219,17 +219,22 @@ public struct SharedComment: Codable, Equatable, Sendable {
     }
 }
 
-/// A `Presence` record: someone's name, whether they have the document open now, and their inbox.
+/// A `Presence` record: someone's name, whether they have the document open now, what they can do with it, and
+/// their inbox. It's what they say about themselves, so it names them even where iCloud doesn't.
 public struct PresenceInfo: Codable, Equatable, Sendable {
     public var name: String
     public var isViewing: Bool
     /// The link to their inbox zone, for notices to them.
     public var inboxURL: URL?
+    public var isOwner: Bool?
+    public var permission: CollaboratorPermission?
 
-    public init(name: String, isViewing: Bool, inboxURL: URL?) {
+    public init(name: String, isViewing: Bool, inboxURL: URL?, isOwner: Bool? = nil, permission: CollaboratorPermission? = nil) {
         self.name = name
         self.isViewing = isViewing
         self.inboxURL = inboxURL
+        self.isOwner = isOwner
+        self.permission = permission
     }
 }
 

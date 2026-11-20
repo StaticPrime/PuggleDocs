@@ -423,6 +423,11 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
         }
     }
 
+    /// Gives the share of a document of this person's its new name.
+    func retitleShare(of id: UUID, to title: String) async {
+        _ = try? await changeShare(of: id) { $0[CKShare.SystemFieldKey.title] = title }
+    }
+
     // MARK: The system's invitation
 
     /// Shows the system's invitation to a document of this person's, which sends its link by Messages, Mail or
@@ -478,6 +483,22 @@ final class CloudKitCollaboration: NSObject, CollaborationService {
                 completion(.success(entry))
             } catch {
                 collaborationLog.error("Joining a shared document failed: \(error.localizedDescription, privacy: .public)")
+                completion(.failure(Self.problem(error)))
+            }
+        }
+    }
+
+    /// Joins a document from its invitation link, pasted in: for when clicking the link opens it in a browser.
+    func open(link url: URL, completion: @escaping (Result<SharedDocumentEntry, Error>) -> Void) {
+        Task {
+            do {
+                let metadata = try await container.shareMetadata(for: url)
+                accept(metadata, completion: completion)
+            } catch let error as CKError where [.unknownItem, .permissionFailure].contains(error.code) {
+                collaborationLog.error("Opening an invitation link failed: \(error.localizedDescription, privacy: .public)")
+                completion(.failure(CollaborationError.failed("That link doesn’t open for the Apple ID this Mac is signed in to iCloud with. Ask whoever shared it to invite that Apple ID, or to share it with Anyone with the Link.")))
+            } catch {
+                collaborationLog.error("Opening an invitation link failed: \(error.localizedDescription, privacy: .public)")
                 completion(.failure(Self.problem(error)))
             }
         }
@@ -845,6 +866,13 @@ final class CloudKitChannel: CollaborationChannel {
     }
 
     func sharingChanged(_ share: CKShare) {
+        // What iCloud says about who's in it: with names, addresses and identities or without them.
+        let people = share.participants.map { participant -> String in
+            let identity = participant.userIdentity
+            return "\(participant.role == .owner ? "owner" : "participant") (name \(identity.nameComponents != nil ? "yes" : "no"), "
+                + "address \(identity.lookupInfo != nil ? "yes" : "no"), identity \(identity.userRecordID != nil ? "yes" : "no"))"
+        }
+        collaborationLog.notice("The share lists \(people.count) people: \(people.joined(separator: "; "), privacy: .public)")
         delegate?.channel(self, sharingChanged: service.sharing(of: id, title: info?.title ?? "", share: share, mine: owner == nil))
     }
 
@@ -885,7 +913,7 @@ final class CloudKitChannel: CollaborationChannel {
 
     private func fetchDocumentZone() async throws {
         var changes: [LoggedChange] = []
-        var newerSnapshot = false
+        var retitled: String?
         try await readZone(documentZone, desiredKeys: [CollaborationRecords.infoKey, CollaborationRecords.revisionKey, CollaborationRecords.changeIDKey,
                                                        CollaborationRecords.authorKey, "authorName", CollaborationRecords.changeKey, "changeFile"]) { record in
             if let share = record as? CKShare {
@@ -894,13 +922,13 @@ final class CloudKitChannel: CollaborationChannel {
                 changes.append(change)
             } else if record.recordType == CollaborationRecords.documentType {
                 if let info = CollaborationRecords.decode(SharedDocumentInfo.self, from: record[CollaborationRecords.infoKey] as? Data) {
-                    newerSnapshot = info.snapshotRevision > (self.info?.snapshotRevision ?? 0)
+                    if let old = self.info, old.title != info.title { retitled = info.title }
                     self.info = info
                 }
             }
         } deleted: { _ in }
         if !changes.isEmpty { delegate?.channel(self, received: changes) }
-        _ = newerSnapshot
+        if let retitled { delegate?.channel(self, retitled: retitled) }
     }
 
     private func fetchTalkZone() async throws {
@@ -1036,6 +1064,39 @@ final class CloudKitChannel: CollaborationChannel {
         }
     }
 
+    func setTitle(_ title: String) {
+        let database = database
+        let zone = documentZone
+        let id = id
+        Task {
+            for _ in 0..<3 {
+                do {
+                    let record: CKRecord
+                    if let documentRecord {
+                        record = documentRecord
+                    } else {
+                        record = try await database.record(for: CKRecord.ID(recordName: CollaborationRecords.documentName, zoneID: zone))
+                    }
+                    guard var info = CollaborationRecords.decode(SharedDocumentInfo.self, from: record[CollaborationRecords.infoKey] as? Data),
+                          info.title != title else { return }
+                    info.title = title
+                    record[CollaborationRecords.infoKey] = CollaborationRecords.encode(info)
+                    let result = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged)
+                    documentRecord = try result.saveResults[record.recordID]?.get()
+                    self.info = info
+                    // The name the system's invitations show, too.
+                    await service.retitleShare(of: id, to: title)
+                    return
+                } catch let error as CKError where error.code == .serverRecordChanged {
+                    documentRecord = error.serverRecord
+                } catch {
+                    collaborationLog.error("Renaming a shared document failed: \(error.localizedDescription, privacy: .public)")
+                    return
+                }
+            }
+        }
+    }
+
     /// Changes long since in a snapshot go, a few hundred at a time; plenty are kept for comments made against older
     /// revisions and for Macs catching up.
     private func collectGarbage(below revision: Int) async {
@@ -1096,14 +1157,15 @@ final class CloudKitChannel: CollaborationChannel {
         }
     }
 
-    func setPresence(viewing: Bool) {
+    func setPresence(viewing: Bool, isOwner: Bool, permission: CollaboratorPermission) {
         guard let me = service.status.me else { return }
         let database = database
         Task {
             guard let talkZone = await joinedTalkZone() else { return }
             let record = CKRecord(recordType: CollaborationRecords.presenceType,
                                   recordID: CKRecord.ID(recordName: CollaborationRecords.presenceName(me.id), zoneID: talkZone))
-            record[CollaborationRecords.infoKey] = CollaborationRecords.encode(PresenceInfo(name: me.name, isViewing: viewing, inboxURL: service.inboxURL))
+            record[CollaborationRecords.infoKey] = CollaborationRecords.encode(PresenceInfo(name: me.name, isViewing: viewing, inboxURL: service.inboxURL,
+                                                                                           isOwner: isOwner, permission: permission))
             _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .changedKeys)
         }
     }

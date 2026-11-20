@@ -186,6 +186,54 @@ final class CollaborationController: NSObject {
         }
     }
 
+    /// Joins a document from an invitation link pasted into PuggleDocs, and opens it: for when clicking the link
+    /// opened it in a web browser instead.
+    func openInvitationLink(_ url: URL, completion: ((Error?) -> Void)? = nil) {
+        requestNotificationPermission()
+        service.open(link: url) { [weak self] result in
+            switch result {
+            case let .success(entry):
+                self?.openShared(entry)
+                completion?(nil)
+            case let .failure(error):
+                completion?(error)
+            }
+        }
+    }
+
+    /// Asks for an invitation link, offering the one on the clipboard, and opens its document.
+    func askForInvitationLink() {
+        let alert = NSAlert()
+        alert.messageText = "Open an Invitation Link"
+        alert.informativeText = "Paste the link someone sent you to a document they shared. PuggleDocs opens it as clicking the link would have."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+        field.placeholderString = "https://www.icloud.com/share/…"
+        if let copied = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           copied.hasPrefix("https://"), !copied.contains(" ") {
+            field.stringValue = copied
+        }
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: text), url.scheme == "https", url.host != nil else {
+            showProblem("That isn’t a link.", "Copy the whole link from the message it came in, starting with https://, and try again.")
+            return
+        }
+        openInvitationLink(url) { [weak self] error in
+            if let error { self?.showProblem("The shared document couldn’t be opened.", error.localizedDescription) }
+        }
+    }
+
+    private func showProblem(_ message: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
     /// A push from iCloud: something shared has changed.
     func receivedPush(_ userInfo: [String: Any]) {
         (service as? CloudKitCollaboration)?.receivedPush(userInfo)

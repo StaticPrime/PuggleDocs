@@ -21,8 +21,24 @@ final class CollaborationState {
     /// Bumped as time passes, so "last seen" words keep up.
     var clock = Date()
 
-    /// The people other than this Mac's that have joined, the owner first: the round badges in the header.
-    var others: [Collaborator] { collaborators.filter { $0.id != meID && $0.status == .joined } }
+    /// The people other than this Mac's who are in it, the owner first: the round badges in the header. Everyone who
+    /// has opened it, named as they name themselves, so they show even when iCloud doesn't say who they are; then
+    /// those iCloud lists as joined who haven't, by names not shown already, so nobody shows twice.
+    var others: [Collaborator] {
+        var people: [Collaborator] = []
+        for item in presence.values where item.person != meID {
+            var person = collaborators.first { $0.id == item.person }
+                ?? Collaborator(id: item.person, name: item.info.name, isOwner: item.info.isOwner ?? false,
+                                permission: item.info.permission ?? .comment, status: .joined)
+            if person.name.isEmpty { person.name = item.info.name }
+            people.append(person)
+        }
+        for person in collaborators where person.id != meID && person.status == .joined && !people.contains(where: { $0.id == person.id }) {
+            guard people.isEmpty || (!person.name.isEmpty && !people.contains { $0.name == person.name }) else { continue }
+            people.append(person)
+        }
+        return people.sorted { ($0.isOwner ? 0 : 1, $0.displayName.lowercased()) < ($1.isOwner ? 0 : 1, $1.displayName.lowercased()) }
+    }
 
     func isViewing(_ person: Collaborator) -> Bool { presence[person.id]?.isActive(now: clock) ?? false }
 
@@ -195,12 +211,14 @@ final class DocumentCollaboration: NSObject {
         editor.usesSharedUndo = true
         document?.undoManager?.removeAllActions()
         applyPermission()
-        channel?.setPresence(viewing: true)
+        announcePresence(viewing: true)
+        // A file of this person's renamed while it was closed: everyone gets its new name.
+        titleChanged()
         heartbeat?.invalidate()
         heartbeat = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.channel?.setPresence(viewing: true)
+                self.announcePresence(viewing: true)
                 self.state?.clock = Date()
             }
         }
@@ -212,7 +230,7 @@ final class DocumentCollaboration: NSObject {
     func end(saying presenceEnds: Bool = true) {
         guard phase != .ended else { return }
         sendNotice()
-        if presenceEnds { channel?.setPresence(viewing: false) }
+        if presenceEnds { announcePresence(viewing: false) }
         phase = .ended
         channel?.stop()
         channel = nil
@@ -230,6 +248,17 @@ final class DocumentCollaboration: NSObject {
         undoEntries = []
         redoEntries = []
         document?.undoManager?.removeAllActions()
+    }
+
+    /// The owner renamed the document: its name in iCloud follows, and with it the name everyone else sees.
+    func titleChanged() {
+        guard isOwner, phase == .live else { return }
+        channel?.setTitle(title)
+    }
+
+    /// Tells the others whether this person has the document open, and who they are in it.
+    private func announcePresence(viewing: Bool) {
+        channel?.setPresence(viewing: viewing, isOwner: isOwner, permission: isOwner ? .edit : (sharing?.myPermission ?? .comment))
     }
 
     /// The window is closing: everyone's told this person has gone.
@@ -725,9 +754,10 @@ final class DocumentCollaboration: NSObject {
         state.isOwner = isOwner
         state.meID = me?.id
         if let sharing {
-            state.collaborators = sharing.collaborators
+            let people = named(sharing.collaborators)
+            state.collaborators = people
             state.permission = sharing.myPermission
-            state.ownerName = sharing.owner.displayName
+            state.ownerName = people.first(where: \.isOwner)?.displayName ?? sharing.owner.displayName
         } else if let info {
             state.ownerName = info.ownerName
         }
@@ -753,6 +783,29 @@ final class DocumentCollaboration: NSObject {
                 state.statusSymbol = "checkmark.icloud"
             }
         }
+    }
+
+    /// The people in the share, named where iCloud doesn't say who they are: the owner as the document names them,
+    /// anyone else as they name themselves when they open it.
+    private func named(_ people: [Collaborator]) -> [Collaborator] {
+        let presence = state?.presence ?? [:]
+        var people = people
+        for index in people.indices where people[index].name.isEmpty {
+            if let seen = presence[people[index].id] {
+                people[index].name = seen.info.name
+            } else if people[index].isOwner, let owner = info?.ownerName, !owner.isEmpty {
+                people[index].name = owner
+            }
+        }
+        // One person iCloud says nothing about, and one person who opened it whom iCloud lists under no identity of
+        // theirs: the same person.
+        let listed = Set(people.map(\.id))
+        let unlisted = presence.values.filter { $0.person != me?.id && !listed.contains($0.person) }
+        let nameless = people.indices.filter {
+            people[$0].name.isEmpty && people[$0].address == nil && people[$0].id != me?.id && people[$0].status == .joined
+        }
+        if nameless.count == 1, unlisted.count == 1, let only = unlisted.first { people[nameless[0]].name = only.info.name }
+        return people
     }
 
     /// The owner changed how it's shared, from the sharing sheet.
@@ -792,6 +845,13 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
         flush()
     }
 
+    func channel(_ channel: CollaborationChannel, retitled title: String) {
+        info?.title = title
+        guard !isOwner, let document, document.sharedCopy?.title != title else { return }
+        document.sharedCopy?.title = title
+        windowController?.synchronizeWindowTitleWithDocumentName()
+    }
+
     func channel(_ channel: CollaborationChannel, receivedComments comments: [SharedComment], deleted: [String]) {
         received(comments, deleted: deleted)
     }
@@ -800,6 +860,7 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
         guard let state else { return }
         for item in presence { state.presence[item.person] = item }
         state.clock = Date()
+        updateState()
         let othersActive = state.presence.values.contains { $0.person != me?.id && $0.isActive() }
         channel.pollInterval = othersActive ? 2 : 15
     }
@@ -809,6 +870,7 @@ extension DocumentCollaboration: CollaborationChannelDelegate {
         self.sharing = sharing
         if phase == .live {
             applyPermission()
+            if couldEdit != canEdit { announcePresence(viewing: true) }
             if couldEdit != canEdit, !isOwner {
                 windowController?.state.banner = canEdit
                     ? "\(sharing.owner.displayName) changed your access: you can now edit “\(title)”."

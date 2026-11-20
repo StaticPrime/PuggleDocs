@@ -175,26 +175,7 @@ struct HeaderView: View {
                 CommentHistoryView(model: comments, controller: actions.editor.comments)
             }
             ToolbarIconButton(symbol: "clock.arrow.circlepath", help: "Open version history") { actions.showVersionHistory() }
-            Button { actions.showCollaborate() } label: {
-                Group {
-                    if compact {
-                        Image(systemName: collaborateSymbol)
-                    } else {
-                        Label("Collaborate", systemImage: collaborateSymbol)
-                    }
-                }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, compact ? 10 : 12)
-                .frame(height: 30)
-                .background(Capsule().fill(Theme.accent))
-                .contentShape(Capsule())
-                .fixedSize()
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .help(state.collaboration.isShared ? "See and change who this document is shared with" : "Share this document with people to work on it together")
-            .accessibilityLabel("Collaborate")
+            if state.showsCollaborateButton { collaborateButton(compact: compact) }
             ToolbarDropdown(help: "Download a copy", showsChevron: false, open: { actions.popUp(.download, from: $0) }) {
                 Group {
                     if compact {
@@ -214,6 +195,30 @@ struct HeaderView: View {
     }
 
     private var collaborateSymbol: String { state.collaboration.isShared ? "person.2.fill" : "person.badge.plus" }
+
+    /// The Collaborate button, for documents of this person's: those shared with them don't have it.
+    private func collaborateButton(compact: Bool) -> some View {
+        Button { actions.showCollaborate() } label: {
+            Group {
+                if compact {
+                    Image(systemName: collaborateSymbol)
+                } else {
+                    Label("Collaborate", systemImage: collaborateSymbol)
+                }
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, compact ? 10 : 12)
+            .frame(height: 30)
+            .background(Capsule().fill(Theme.accent))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(state.collaboration.isShared ? "See and change who this document is shared with" : "Share this document with people to work on it together")
+        .accessibilityLabel("Collaborate")
+    }
 
     /// While shared, how its iCloud copy is keeping up; otherwise how its file is.
     private var statusText: String { state.collaboration.isShared ? state.collaboration.statusText : state.saveStatus.text }
