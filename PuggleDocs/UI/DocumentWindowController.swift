@@ -723,7 +723,9 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         }
     }
 
-    @objc func pdRename(_ sender: Any?) { state.renameRequest += 1 }
+    /// File ▸ Rename: the name in the header, all of it selected, ready to type over. It answers the standard rename
+    /// command, so the File menu has this one Rename and macOS doesn't add a second beside Make a copy.
+    @objc(renameDocument:) func renameFromMenu(_ sender: Any?) { state.renameRequest += 1 }
 
     @objc func pdMoreFonts(_ sender: Any?) {
         presentSheet { dismiss in
@@ -836,7 +838,7 @@ extension DocumentWindowController: DocumentCommands, NSMenuItemValidation {
         case #selector(pdRemoveFooter(_:)): return editable && editor.footerStorage.length > 0
         case #selector(pdInsertPageBreak(_:)), #selector(pdBulletedList(_:)), #selector(pdNumberedList(_:)), #selector(pdChecklist(_:)), #selector(pdInsertImage(_:)):
             if editor.isEditingHeaderFooter { return false }
-        case #selector(pdRename(_:)):
+        case #selector(renameFromMenu(_:)):
             return puggleDocument?.sharedCopy == nil
         case #selector(pdZoomIn(_:)), #selector(pdZoomOut(_:)), #selector(pdActualSize(_:)), #selector(pdZoomToFit(_:)),
              #selector(pdWordCount(_:)), #selector(pdDownload(_:)), #selector(pdShowShortcuts(_:)):

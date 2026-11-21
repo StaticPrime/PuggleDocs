@@ -31,6 +31,8 @@ final class CollaborationSelfTest {
     private var startedNotices = 0
     private var offlineText = ""
     private var offlineComments = 0
+    private var renameRequestsBefore = 0
+    private var titleBeforeRename = ""
 
     init(controller: DocumentWindowController) { self.controller = controller }
 
@@ -107,6 +109,15 @@ final class CollaborationSelfTest {
 
     private var everythingSent: Bool { !(session?.hasUnsentChanges ?? true) }
 
+    /// Runs `work` once `window` is the key window: a window brought to the front becomes key a moment later.
+    private static func whenKey(_ window: NSWindow?, attempt: Int = 0, _ work: @escaping () -> Void) {
+        if NSApp.keyWindow === window || attempt >= 40 {
+            work()
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { whenKey(window, attempt: attempt + 1, work) }
+        }
+    }
+
     /// A picture too big to travel inside a change record (its noise doesn't compress), as a pasted photo is.
     private static let testPicture: Data = {
         let width = 640, height = 480
@@ -136,6 +147,33 @@ final class CollaborationSelfTest {
     }
 
     private func defineSteps() {
+        // MARK: Renaming
+
+        step("the File menu has one Rename, the standard one") {} until: {
+            let file = NSApp.mainMenu?.items.first { $0.title == "File" }?.submenu
+            file?.update()
+            let renames = file?.items.filter { $0.title.hasPrefix("Rename") } ?? []
+            return renames.count == 1 && renames.first?.action == NSSelectorFromString("renameDocument:")
+        }
+        step("Rename selects the whole name in the header, ready to type over") {
+            self.renameRequestsBefore = self.controller.state.renameRequest
+            self.titleBeforeRename = self.controller.state.title
+            self.controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            // As File ▸ Rename is chosen: from the window in front, once it is.
+            Self.whenKey(self.controller.window) { NSApp.sendAction(NSSelectorFromString("renameDocument:"), to: nil, from: nil) }
+        } until: {
+            guard self.controller.state.renameRequest > self.renameRequestsBefore,
+                  let field = self.controller.window?.firstResponder as? NSTextView, field.isFieldEditor, !field.string.isEmpty
+            else { return false }
+            return field.selectedRange() == NSRange(location: 0, length: (field.string as NSString).length)
+        }
+        step("leaving the name as it was changes nothing") {
+            self.controller.window?.makeFirstResponder(nil)
+        } until: {
+            !((self.controller.window?.firstResponder as? NSTextView)?.isFieldEditor ?? false) && self.controller.state.title == self.titleBeforeRename
+        }
+
         // MARK: Sharing a document of this person's
 
         step("a new document isn't shared", here: true) {

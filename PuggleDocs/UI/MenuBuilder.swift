@@ -39,7 +39,6 @@ import PuggleDocsKit
     func pdWordCount(_ sender: Any?)
     func pdToggleSpellCheck(_ sender: Any?)
     func pdDownload(_ sender: Any?)
-    func pdRename(_ sender: Any?)
     func pdMoreFonts(_ sender: Any?)
     func pdSetFont(_ sender: Any?)
     func pdSetFontSize(_ sender: Any?)
@@ -185,7 +184,8 @@ enum MenuBuilder {
             .separator(),
             item("Save", #selector(NSDocument.save(_:)), "s", symbol: "square.and.arrow.down"),
             submenu("Download", symbol: "arrow.down.to.line", download),
-            item("Rename", #selector(DocumentCommands.pdRename(_:)), symbol: "pencil"),
+            // The standard rename command, answered by the window: with it here macOS adds no Rename of its own.
+            item("Rename", #selector(NSDocument.rename(_:)), symbol: "pencil"),
             item("Move…", #selector(NSDocument.move(_:)), symbol: "folder.badge.gearshape"),
             .separator(),
             submenu("Version history", symbol: "clock.arrow.circlepath", [
