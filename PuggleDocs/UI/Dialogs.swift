@@ -128,7 +128,7 @@ struct KeyboardShortcutsView: View {
 
     private let groups: [(String, [(String, String)])] = [
         ("Text formatting", [("Bold", "⌘B"), ("Italic", "⌘I"), ("Underline", "⌘U"), ("Strikethrough", "⇧⌘X"),
-                             ("Superscript", "⌘."), ("Subscript", "⌘,"), ("Increase font size", "⇧⌘."),
+                             ("Superscript", "⌘."), ("Increase font size", "⇧⌘."),
                              ("Decrease font size", "⇧⌘,"), ("Clear formatting", "⌘\\")]),
         ("Paragraph formatting", [("Normal text", "⌥⌘0"), ("Heading 1 – 6", "⌥⌘1 – 6"), ("Left / center / right", "⇧⌘L / E / R"),
                                   ("Justify", "⇧⌘J"), ("Numbered list", "⇧⌘7"), ("Bulleted list", "⇧⌘8"), ("Checklist", "⇧⌘9"),

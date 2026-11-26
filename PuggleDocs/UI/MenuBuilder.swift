@@ -287,7 +287,8 @@ enum MenuBuilder {
             item("Underline", #selector(DocumentCommands.pdToggleUnderline(_:)), "u", symbol: "underline"),
             item("Strikethrough", #selector(DocumentCommands.pdToggleStrikethrough(_:)), "x", [.command, .shift], symbol: "strikethrough"),
             item("Superscript", #selector(DocumentCommands.pdSuperscript(_:)), ".", symbol: "textformat.superscript"),
-            item("Subscript", #selector(DocumentCommands.pdSubscript(_:)), ",", symbol: "textformat.subscript"),
+            // No shortcut: ⌘, is PuggleDocs ▸ Settings…, as in every Mac app.
+            item("Subscript", #selector(DocumentCommands.pdSubscript(_:)), symbol: "textformat.subscript"),
             .separator(),
             submenu("Size", [
                 item("Increase font size", #selector(DocumentCommands.pdIncreaseFontSize(_:)), ".", [.command, .shift]),
