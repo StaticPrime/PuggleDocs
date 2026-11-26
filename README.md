@@ -12,7 +12,7 @@ PuggleDocs is a full word processor for the Mac, with real pages, rulers and sty
 
 It opens and saves Word (.docx), OpenDocument (.odt), Rich Text (.rtf), Markdown (.md), web page (.html) and plain text (.txt) files, and exports PDF and EPUB.
 
-PuggleDocs is free, needs no account of its own and has no tracking. It runs inside Apple's app sandbox with no permission to use the network (macOS takes the documents you share to and from iCloud for it), on macOS 14 Sonoma or later with Apple silicon or Intel. It's written in Swift with AppKit, TextKit and SwiftUI, and is part of the PuggleSoft family with [PuggleSheets](https://github.com/StaticPrime/PuggleSheets) and [PuggleSlides](https://github.com/StaticPrime/PuggleSlides).
+PuggleDocs is free, needs no account of its own and has no tracking. It runs inside Apple's app sandbox, and the only connection it makes itself is to GitHub as it opens, to see whether there's a new version (macOS takes the documents you share to and from iCloud for it). It runs on macOS 14 Sonoma or later with Apple silicon or Intel. It's written in Swift with AppKit, TextKit and SwiftUI, and is part of the PuggleSoft family with [PuggleSheets](https://github.com/StaticPrime/PuggleSheets) and [PuggleSlides](https://github.com/StaticPrime/PuggleSlides).
 
 ## Features
 
@@ -63,6 +63,14 @@ PuggleDocs is free, needs no account of its own and has no tracking. It runs ins
 - **Download** offers Word, OpenDocument, Rich Text, PDF, Plain Text, Web Page, EPUB and Markdown, in that order.
 - **macOS integration.** Autosave, version history (File ▸ Version history), Make a copy, Move, printing, spelling and grammar checking, smart quotes and dashes, and copy/paste between PuggleDocs windows and other apps.
 
+### Updates
+
+- **Splash screen.** As it opens, PuggleDocs shows its logo while it asks GitHub whether there's a new version. If GitHub hasn't answered within 5 seconds, PuggleDocs opens without waiting for it.
+- **Automatic Updates.** PuggleDocs ▸ Settings… (⌘,), on unless you turn it off. When PuggleDocs opens and there's a new version, the splash screen says "PuggleDocs is Updating" with a bar showing the download as it arrives, then an "Updating…" bar showing macOS's installer putting it in place, and the new version opens, with any documents that were waiting to open. macOS asks for an administrator's password to install it, as PuggleDocs is installed for everyone on the Mac. Cancelling the download or the password dialog opens PuggleDocs as it is, and that version isn't installed by itself again; the banner offers it instead.
+- **Update banner.** With Automatic Updates off, a banner at the top of each window says when a new version is available. **Click Here** downloads and installs it the same way, then closes the open documents (saving them) and opens them again in the new version. **Dismiss** hides the banner until PuggleDocs next opens.
+- **Checked before it's installed.** An update is installed only if it's the file the release describes (its size and SHA-256), signed by the same developer as the copy that's running, and notarized by Apple.
+- **App Store.** A copy from the App Store is kept up to date by the App Store. When the App Store has a new version, the banner says so, and Click Here opens PuggleDocs's page there.
+
 Help ▸ Keyboard shortcuts (⌘/) lists every keyboard shortcut.
 
 ## Known limits
@@ -73,6 +81,8 @@ Help ▸ Keyboard shortcuts (⌘/) lists every keyboard shortcut.
 - Collaborating goes through iCloud, so it needs an iCloud account, for you and for everyone you share with, and a copy of PuggleDocs signed to use it (see Sharing through iCloud); when it can't, the Collaborate sheet says why. Changes made at the same moment are merged character by character; formatting both people change on the same words at once ends as one of them made it.
 - A shared document opens from iCloud, so it needs the connection to open, and it's read-only while iCloud can't be reached. A change made just before the connection dropped goes once it's back; closing the document before then asks first. While a document is shared, its copy in iCloud is the one that counts: the file on the owner's Mac follows it, and changes made to that file in other apps are replaced.
 - Notifications reach people once they've opened the shared document in PuggleDocs, and macOS asks once whether PuggleDocs may show them. Sharing a document clears its undo history up to then.
+- Installing an update takes an administrator's password, so someone who can't give one keeps the version they have (the banner keeps offering the new one). Version 1.1.1 and earlier don't update themselves: the first version that does has to be installed by hand.
+- Updates go where the installer puts PuggleDocs, the Applications folder. A copy moved somewhere else stays as it is, and the new version opens from Applications.
 
 ## Requirements
 
@@ -89,7 +99,7 @@ xcodebuild -project PuggleDocs.xcodeproj -scheme PuggleDocs -configuration Debug
 open build/DerivedData/Build/Products/Debug/PuggleDocs.app
 ```
 
-The app is sandboxed. Debug builds are signed to run on the Mac that built them, unless `Config/Signing.xcconfig` names a team (see Sharing from Xcode below); releases are signed by `Tools/make-installer.sh`.
+The app is sandboxed. The update installer inside it (`UpdateInstaller.xpc`, built by the UpdateInstaller target) isn't, since it installs updates in /Applications, which the sandbox can't change. Debug builds are signed to run on the Mac that built them, unless `Config/Signing.xcconfig` names a team (see Sharing from Xcode below), which signs the update installer too (`Config/UpdateInstaller.xcconfig`); releases are signed by `Tools/make-installer.sh`. Debug builds don't update themselves.
 
 ### Installer
 
@@ -112,6 +122,8 @@ Tools/release.sh major      # a major update: 1.2.3 → 2.0.0
 ```
 
 The script raises the version and the build number in the Xcode project, commits "Release version 1.2.4", tags it `v1.2.4` and pushes both. The tag starts the Release workflow on GitHub, which runs the package tests, builds the installer with `Tools/make-installer.sh` and publishes it as a GitHub release. The installer keeps the same name in every release, so https://github.com/StaticPrime/PuggleDocs/releases/latest/download/PuggleDocs.pkg always downloads the newest one. `Tools/release.sh --dry-run` shows the next version without changing anything.
+
+Each release also gets `update.json`, which describes the installer (its version, build, minimum macOS, address, size and SHA-256). PuggleDocs reads https://github.com/StaticPrime/PuggleDocs/releases/latest/download/update.json as it opens, to find new versions. Only a signed and notarized release can update copies already installed: the update installer turns down anything else.
 
 To sign and notarize releases, add these secrets under the repository's Settings ▸ Secrets and variables ▸ Actions. Without them, releases are published unsigned, with a warning on the run.
 
@@ -161,7 +173,7 @@ While debug builds use the development environment, everyone collaborating has t
 
 ## Tests
 
-The document model, file formats and the engine that keeps shared documents the same on every Mac live in a Swift package with unit tests (thousands of random changes made at the same time ending the same, three simulated Macs editing one document through its log, every round of editing recorded and undone exactly, tables staying whole on another Mac):
+The document model, file formats and the engine that keeps shared documents the same on every Mac live in a Swift package with unit tests (thousands of random changes made at the same time ending the same, three simulated Macs editing one document through its log, every round of editing recorded and undone exactly, tables staying whole on another Mac). So does the update check (versions, `update.json`, the App Store's answer, when to install, the installer's progress and who signed a package), with the command that installs updates run without an administrator, which turns down a package its developer didn't sign:
 
 ```sh
 cd Packages/PuggleDocsKit && swift test
@@ -179,7 +191,9 @@ A second suite checks collaboration end to end on a stand-in for iCloud, with si
 build/DerivedData/Build/Products/Debug/PuggleDocs.app/Contents/MacOS/PuggleDocs -PDSelfTest YES -PDSelfTestSuite collaboration
 ```
 
-Other debug launch arguments: `-PDSampleDocument YES` fills new documents with sample content. `-PDSnapshot name.png` saves a screenshot of the first window (or its open sheet) to the app's temporary folder and quits. Combine it with `-PDWindowWidth`, `-PDZoom`, `-PDPageColor RRGGBB`, `-PDOpenSheet pageSetup|wordCount|customSpacing|tableProperties|shortcuts`, `-PDExportPDF name.pdf`, `-PDOpenEditable YES` (when opening a PDF), `-PDFind word`, `-PDShowLink editor|preview`, `-PDInsertTestImage YES`, `-PDInsertTestTable YES`, `-PDHeaderFooter YES`, `-PDShowTablePicker YES`, `-PDShowOutline YES`, `-PDShowAbout YES` or `-PDComments sample|active|draft|selection|history|suggestions` (example comments and suggestions in the sample document) to check layouts. `-PDStandInCloud YES` collaborates through the stand-in for iCloud, and with `-PDCollaborationDemo YES` too the window's document is shared with two simulated people who open it, type and comment (add `-PDOpenSheet collaborate` for the Collaborate sheet, or `-PDDemoOffline YES` to show it while iCloud can't be reached).
+Other debug launch arguments: `-PDSampleDocument YES` fills new documents with sample content. `-PDSnapshot name.png` saves a screenshot of the first window (or its open sheet) to the app's temporary folder and quits. Combine it with `-PDWindowWidth`, `-PDZoom`, `-PDPageColor RRGGBB`, `-PDOpenSheet pageSetup|wordCount|customSpacing|tableProperties|shortcuts`, `-PDExportPDF name.pdf`, `-PDOpenEditable YES` (when opening a PDF), `-PDFind word`, `-PDShowLink editor|preview`, `-PDInsertTestImage YES`, `-PDInsertTestTable YES`, `-PDHeaderFooter YES`, `-PDShowTablePicker YES`, `-PDShowOutline YES`, `-PDShowAbout YES` or `-PDComments sample|active|draft|selection|history|suggestions` (example comments and suggestions in the sample document) to check layouts. `-PDStandInCloud YES` collaborates through the stand-in for iCloud, and with `-PDCollaborationDemo YES` too the window's document is shared with two simulated people who open it, type and comment (add `-PDOpenSheet collaborate` for the Collaborate sheet, or `-PDDemoOffline YES` to show it while iCloud can't be reached). `-PDOpenSheet settings` opens Settings.
+
+For updates: `-UpdateDemo splash|downloading|waiting|installing|restarting|banner|appstore` shows that part of updating with made-up values and no network (combine it with `-PDSnapshot`), and `-UpdateDemo relaunch` opens a new copy of the app and quits, as the end of an update does. `-UpdateFeedURL <address of an update.json>` makes a debug build check there (a server on this Mac can serve one over plain HTTP); with `-UpdateDryRun YES` too, the update installer only checks the downloaded package, as it does before asking for a password, then the installation is acted out without the password dialog (nothing is installed) and the app opens a new copy of itself, as it does after a real update. `-UpdateAppStoreBundleID <bundle identifier>` asks the App Store about that app instead, as a copy from the App Store would. `-ShowsSplash NO` opens without the splash screen, as the self-tests and screenshots do. The update check writes what it finds to the Mac's log under the Updates category.
 
 ## Project layout
 
@@ -191,12 +205,15 @@ PuggleDocs/                 macOS app target (files are picked up automatically 
   Document/                 PuggleDocument (editable documents) and PDFViewerDocument (PDF viewer)
   Editor/                   Paged text system, list rendering, typing behaviours, commands
   UI/                       Window controllers, SwiftUI header and toolbar, ruler, menus, dialogs
+  Updates/                  The splash screen, the update check, download and installation, the banner, Settings
   Resources/                Asset catalog (app icon, About window logo)
+UpdateInstaller/            The update installer service (outside the sandbox), inside the app
 Packages/PuggleDocsKit/     Document model, formatting engine and file formats (no UI)
   Model/                    Named styles, list items, page setup, colour palette, comments, suggestions
   Formatting/               Character, paragraph, style and list operations; list numbering
   IO/                       DOCX and ODT (ZIP + XML), HTML, Markdown, RTF and plain-text codecs, EPUB, clipboard archive
   Collaboration/            Changes to rich text, recording them, a shared document's log, its iCloud records, summaries
+  PuggleUpdate/             Updates: versions, update.json, the App Store's answer, the command that installs updates
 Config/                     Signing for debug builds (see Sharing from Xcode)
 Tools/make-icons.swift      Regenerates the app icon PNGs
 Tools/make-installer.sh     Builds the PuggleDocs.pkg installer
@@ -218,6 +235,7 @@ Tools/release.sh            Releases the next version (see Releasing a new versi
 - **Paragraph styles** are stored per paragraph (`pdNamedStyle`) and written as real Word styles (`Heading1`, `Title`, …), so headings stay headings in Word and other word processors.
 - **Fonts a file asks for but the Mac doesn't have** are shown with a stand-in, and the original name is kept, so it survives saving.
 - **Collaboration.** A shared document is two zones in its owner's iCloud. The document zone holds a snapshot of the whole document now and then, and its log: one record per revision, each one change, named for its revision so that only one change can ever take it. Each Mac sends its changes one at a time, claiming the revision after the last it knows; when another Mac got there first, it applies that change and rewrites its own to follow it (operational transformation over rich text: keep, insert, delete and restyle, with each attribute's value encoded), so every Mac ends with the same text. That zone is shared with each person as edit or read-only, so iCloud itself refuses changes from people who may only comment. The talk zone, which everyone in the document can write to through a link kept in the document zone, holds the comments (each anchored to a range at a revision of the log) and who has it open. Changes are recorded by the text storage itself, a subclass that notes what each round of editing inserted, deleted or restyled, however it was done, along with the change that undoes it; while a document is shared, undo steps are those changes, rewritten as other people's arrive. Tables travel with identifiers, so a table typed into on another Mac stays one table. Each person's Mac also keeps an inbox zone shared by link with the people they work with, who leave a short summary there after a quiet spell; a subscription on it makes iCloud show the notification.
+- **Updates.** The splash screen holds back what opening would do (an untitled document, documents opened from the Finder, invitation links, notifications) until the update check is done. The check reads the newest release's `update.json`, with a 5-second limit and nothing cached. A newer version's installer is downloaded into the app's own container and checked against the size and SHA-256 in `update.json`. The sandboxed app can't change /Applications, so it hands the file to the update installer, an XPC service inside the app that runs outside the sandbox and takes connections only from the app it's inside. The service checks that the package is signed with a Developer ID Installer certificate of the same team as itself and that Gatekeeper accepts it (it's notarized), then runs AppleScript's `do shell script … with administrator privileges`, which is where macOS asks for the password. That command, as root, copies the package into a new folder only root can change, checks it again there, and runs macOS's `installer`, whose progress (`installer -verboseR`) the service reads from a log and passes to the "Updating…" bar. Afterwards the service makes sure /Applications holds the version `update.json` named, so a release that doesn't contain what it says can't send PuggleDocs round in circles. The app then closes its documents and opens a new copy of itself from /Applications, handing it the documents and links that were waiting, and quits. A copy from the App Store (one with an App Store receipt) instead asks Apple's lookup service for the version the App Store has. An App Store build must leave out the update installer, as the App Store doesn't allow code outside the sandbox.
 
 ## Contributing
 

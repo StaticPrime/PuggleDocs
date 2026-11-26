@@ -52,6 +52,7 @@ struct ChromeView: View {
             FormattingToolbar(state: state, actions: actions)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 6)
+            UpdateBannerView(banner: UpdateController.shared.banner)
             if let banner = state.banner {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "info.circle.fill").foregroundStyle(Color.orange)
