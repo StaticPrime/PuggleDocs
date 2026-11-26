@@ -81,7 +81,7 @@ Help ▸ Keyboard shortcuts (⌘/) lists every keyboard shortcut.
 - Collaborating goes through iCloud, so it needs an iCloud account, for you and for everyone you share with, and a copy of PuggleDocs signed to use it (see Sharing through iCloud); when it can't, the Collaborate sheet says why. Changes made at the same moment are merged character by character; formatting both people change on the same words at once ends as one of them made it.
 - A shared document opens from iCloud, so it needs the connection to open, and it's read-only while iCloud can't be reached. A change made just before the connection dropped goes once it's back; closing the document before then asks first. While a document is shared, its copy in iCloud is the one that counts: the file on the owner's Mac follows it, and changes made to that file in other apps are replaced.
 - Notifications reach people once they've opened the shared document in PuggleDocs, and macOS asks once whether PuggleDocs may show them. Sharing a document clears its undo history up to then.
-- Installing an update takes an administrator's password, so someone who can't give one keeps the version they have (the banner keeps offering the new one). Version 1.1.1 and earlier don't update themselves: the first version that does has to be installed by hand.
+- Installing an update takes an administrator's password, so someone who can't give one keeps the version they have (the banner keeps offering the new one). Version 1.1.3 and earlier don't update themselves: the first version that does has to be installed by hand.
 - Updates go where the installer puts PuggleDocs, the Applications folder. A copy moved somewhere else stays as it is, and the new version opens from Applications.
 
 ## Requirements
