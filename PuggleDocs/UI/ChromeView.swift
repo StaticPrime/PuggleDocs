@@ -30,6 +30,8 @@ struct WordCountBadge: View {
 /// What the header and toolbar ask their window to do.
 protocol ChromeActions: AnyObject {
     var editor: EditorController { get }
+    /// The window the header and toolbar are in.
+    var window: NSWindow? { get }
     func popUp(_ menu: ToolbarMenu, from view: NSView?)
     func rename(to title: String)
     func showVersionHistory()
@@ -162,9 +164,10 @@ struct HeaderView: View {
         .onExitCommand { titleText = state.title; titleFocused = false; actions.editor.focus() }
     }
 
-    /// File ▸ Rename: once the name's field is being edited, all of the name is selected, so typing replaces it.
+    /// File ▸ Rename: once the name's field is being edited, all of the name is selected, so typing replaces it. The
+    /// field is in this header's own window, whichever window happens to be in front.
     private func selectWholeTitle(attempt: Int = 0) {
-        if let field = NSApp.keyWindow?.firstResponder as? NSTextView, field.isFieldEditor {
+        if let field = actions.window?.firstResponder as? NSTextView, field.isFieldEditor {
             field.selectAll(nil)
         } else if attempt < 10 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { selectWholeTitle(attempt: attempt + 1) }

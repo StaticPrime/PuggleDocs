@@ -109,15 +109,6 @@ final class CollaborationSelfTest {
 
     private var everythingSent: Bool { !(session?.hasUnsentChanges ?? true) }
 
-    /// Runs `work` once `window` is the key window: a window brought to the front becomes key a moment later.
-    private static func whenKey(_ window: NSWindow?, attempt: Int = 0, _ work: @escaping () -> Void) {
-        if NSApp.keyWindow === window || attempt >= 40 {
-            work()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { whenKey(window, attempt: attempt + 1, work) }
-        }
-    }
-
     /// A picture too big to travel inside a change record (its noise doesn't compress), as a pasted photo is.
     private static let testPicture: Data = {
         let width = 640, height = 480
@@ -158,10 +149,11 @@ final class CollaborationSelfTest {
         step("Rename selects the whole name in the header, ready to type over") {
             self.renameRequestsBefore = self.controller.state.renameRequest
             self.titleBeforeRename = self.controller.state.title
-            self.controller.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate()
-            // As File ▸ Rename is chosen: from the window in front, once it is.
-            Self.whenKey(self.controller.window) { NSApp.sendAction(NSSelectorFromString("renameDocument:"), to: nil, from: nil) }
+            // As File ▸ Rename does for the window in front: the standard rename command, up this window's responder
+            // chain. Sent this way it doesn't need PuggleDocs to be the frontmost app, which a self-test started from a
+            // script may not be allowed to become.
+            let window = self.controller.window
+            _ = (window?.firstResponder ?? window)?.tryToPerform(NSSelectorFromString("renameDocument:"), with: nil)
         } until: {
             guard self.controller.state.renameRequest > self.renameRequestsBefore,
                   let field = self.controller.window?.firstResponder as? NSTextView, field.isFieldEditor, !field.string.isEmpty
